@@ -365,6 +365,7 @@ pub(crate) fn run_output(ctx: BackendContext<'_>, target_output: &str) -> Result
     output.zoom = cfg.renderer.zoom as f64;
     output.position_x = cfg.renderer.position_x as f64;
     output.position_y = cfg.renderer.position_y as f64;
+    output.rotation_degrees = cfg.renderer.rotation_degrees;
     output.recompute_geometry();
     let presentation_geometry = output.geometry;
     let mut state = LayerShellState {

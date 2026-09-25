@@ -117,6 +117,16 @@ fn pointer_axis(axis: WEnum<wl_pointer::Axis>) -> Option<PointerAxis> {
     }
 }
 
+fn wayland_buffer_transform(rotation_degrees: u32) -> Result<wl_output::Transform> {
+    match rotation_degrees {
+        0 => Ok(wl_output::Transform::Normal),
+        90 => Ok(wl_output::Transform::_90),
+        180 => Ok(wl_output::Transform::_180),
+        270 => Ok(wl_output::Transform::_270),
+        value => Err(anyhow!("unsupported wallpaper display rotation: {value} degrees")),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch impls
 // ---------------------------------------------------------------------------
@@ -633,6 +643,7 @@ pub(super) fn init_wayland(
     state.objects.surface = Some(compositor.create_surface(qh, ()));
     let surface = state.objects.surface.as_ref().unwrap();
     surface.set_buffer_scale(1);
+    surface.set_buffer_transform(wayland_buffer_transform(state.output.rotation_degrees)?);
 
     if let Some(dmabuf) = state.objects.dmabuf.as_ref().filter(|dmabuf| dmabuf.version() >= 4) {
         state.objects.dmabuf_feedback = Some(dmabuf.get_surface_feedback(surface, qh, ()));
@@ -721,8 +732,29 @@ pub(super) fn update_input_region(
 
 #[cfg(test)]
 mod tests {
-    use super::{reusable_identity_matches, to_opaque_drm_fourcc};
+    use super::{reusable_identity_matches, to_opaque_drm_fourcc, wayland_buffer_transform};
     use crate::backend::layer_shell::state::{DmabufKey, DmabufPlaneKey};
+
+    #[test]
+    fn renderer_clockwise_rotation_maps_to_wayland_buffer_transform() {
+        assert!(matches!(
+            wayland_buffer_transform(0).expect("0 degree transform"),
+            wayland_client::protocol::wl_output::Transform::Normal
+        ));
+        assert!(matches!(
+            wayland_buffer_transform(90).expect("90 degree transform"),
+            wayland_client::protocol::wl_output::Transform::_90
+        ));
+        assert!(matches!(
+            wayland_buffer_transform(180).expect("180 degree transform"),
+            wayland_client::protocol::wl_output::Transform::_180
+        ));
+        assert!(matches!(
+            wayland_buffer_transform(270).expect("270 degree transform"),
+            wayland_client::protocol::wl_output::Transform::_270
+        ));
+        assert!(wayland_buffer_transform(37).is_err());
+    }
 
     #[test]
     fn exported_rgba_formats_are_presented_as_opaque() {

@@ -252,6 +252,13 @@ fn fit_destination(
     (width, height)
 }
 
+fn transformed_frame_extent(width: u32, height: u32, rotation_degrees: u32) -> (u32, u32) {
+    match rotation_degrees {
+        90 | 270 => (height, width),
+        _ => (width, height),
+    }
+}
+
 pub(crate) struct OutputState {
     pub(crate) output_scale: u32,
     pub(crate) preferred_fractional_scale: u32,
@@ -266,6 +273,7 @@ pub(crate) struct OutputState {
     pub(crate) zoom: f64,
     pub(crate) position_x: f64,
     pub(crate) position_y: f64,
+    pub(crate) rotation_degrees: u32,
     pub(crate) geometry: PresentationGeometry,
 }
 
@@ -285,6 +293,7 @@ impl OutputState {
             zoom: 1.0,
             position_x: 0.0,
             position_y: 0.0,
+            rotation_degrees: 0,
             geometry: PresentationGeometry {
                 render_width: 1920,
                 render_height: 1080,
@@ -332,10 +341,15 @@ impl OutputState {
             if self.logical_width > 0 { self.logical_width } else { self.fallback_width }.max(1);
         let viewport_height =
             if self.logical_height > 0 { self.logical_height } else { self.fallback_height }.max(1);
-        geometry_with_render_extent(
-            self.scale_mode,
+        let (frame_width, frame_height) = transformed_frame_extent(
             frame_width.max(1),
             frame_height.max(1),
+            self.rotation_degrees,
+        );
+        geometry_with_render_extent(
+            self.scale_mode,
+            frame_width,
+            frame_height,
             viewport_width,
             viewport_height,
             self.zoom,
@@ -523,6 +537,32 @@ mod tests {
         output.recompute_geometry();
 
         assert!(output.geometry.viewport_source.is_none());
+    }
+
+    #[test]
+    fn quarter_turn_uses_post_transform_frame_extent() {
+        let mut output = OutputState::new(ScaleMode::Stretch);
+        output.logical_width = 1920;
+        output.logical_height = 1080;
+
+        let normal = output.geometry_for_frame(1920, 1080);
+        assert_eq!(normal.render_width, 1920);
+        assert_eq!(normal.render_height, 1080);
+
+        output.rotation_degrees = 90;
+        let rotated = output.geometry_for_frame(1920, 1080);
+        assert_eq!(rotated.render_width, 1080);
+        assert_eq!(rotated.render_height, 1920);
+
+        output.rotation_degrees = 180;
+        let half_turn = output.geometry_for_frame(1920, 1080);
+        assert_eq!(half_turn.render_width, 1920);
+        assert_eq!(half_turn.render_height, 1080);
+
+        output.rotation_degrees = 270;
+        let rotated = output.geometry_for_frame(1920, 1080);
+        assert_eq!(rotated.render_width, 1080);
+        assert_eq!(rotated.render_height, 1920);
     }
 
     #[test]
