@@ -366,6 +366,9 @@ pub(crate) fn apply_selection_to_config(
     }
     config.renderer.fill_mode = wallpaper.fill_mode;
     config.renderer.rotation_degrees = wallpaper.rotation_degrees.degrees();
+    config.renderer.zoom = wallpaper.zoom;
+    config.renderer.position_x = wallpaper.position_x;
+    config.renderer.position_y = wallpaper.position_y;
     match wallpaper.render_resolution {
         RenderResolution::Automatic => {
             config.renderer.render_width = None;
@@ -490,6 +493,32 @@ mod tests {
             .expect("apply playlist selection");
 
         assert_eq!(runtime_config.renderer.fps, 30);
+    }
+
+    #[test]
+    fn playlist_selection_applies_wallpaper_transform() {
+        let mut runtime_config = crate::config::Config::default();
+        runtime_config.wallpapers.insert(
+            "scene".to_string(),
+            we_core::wallpaper::settings::WallpaperSettings {
+                zoom: 2.0,
+                position_x: -0.5,
+                position_y: 0.25,
+                ..Default::default()
+            },
+        );
+        let selection = super::PlaylistSelection {
+            index: 0,
+            wallpaper_id: "scene".to_string(),
+            source: "/wallpapers/scene".to_string(),
+        };
+
+        super::apply_selection_to_config(&mut runtime_config, &selection)
+            .expect("apply playlist selection");
+
+        assert_eq!(runtime_config.renderer.zoom, 2.0);
+        assert_eq!(runtime_config.renderer.position_x, -0.5);
+        assert_eq!(runtime_config.renderer.position_y, 0.25);
     }
 
     #[test]

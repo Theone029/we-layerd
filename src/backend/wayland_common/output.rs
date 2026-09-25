@@ -31,6 +31,9 @@ pub(crate) struct GeometryInput {
     pub(crate) preferred_fractional_scale: u32,
     pub(crate) scale_mode: ScaleMode,
     pub(crate) render_size_override: Option<(u32, u32)>,
+    pub(crate) zoom: f64,
+    pub(crate) position_x: f64,
+    pub(crate) position_y: f64,
 }
 
 fn render_scale_factor(input: GeometryInput) -> f64 {
@@ -54,6 +57,9 @@ pub(crate) fn compute_geometry(input: GeometryInput) -> PresentationGeometry {
             render_height.max(1),
             viewport_width,
             viewport_height,
+            input.zoom,
+            input.position_x,
+            input.position_y,
         );
     }
 
@@ -64,18 +70,25 @@ pub(crate) fn compute_geometry(input: GeometryInput) -> PresentationGeometry {
             input.output_mode_height,
             viewport_width,
             viewport_height,
+            input.zoom,
+            input.position_x,
+            input.position_y,
         );
     }
 
     let scale = render_scale_factor(input);
     let render_width = (viewport_width as f64 * scale).round().max(1.0) as u32;
     let render_height = (viewport_height as f64 * scale).round().max(1.0) as u32;
+
     geometry_with_render_extent(
         input.scale_mode,
         render_width,
         render_height,
         viewport_width,
         viewport_height,
+        input.zoom,
+        input.position_x,
+        input.position_y,
     )
 }
 
@@ -85,8 +98,11 @@ fn geometry_with_render_extent(
     render_height: u32,
     viewport_width: u32,
     viewport_height: u32,
+    zoom: f64,
+    position_x: f64,
+    position_y: f64,
 ) -> PresentationGeometry {
-    match scale_mode {
+    let mut geometry = match scale_mode {
         ScaleMode::Stretch => PresentationGeometry {
             render_width,
             render_height,
@@ -118,7 +134,72 @@ fn geometry_with_render_extent(
                 viewport_source: None,
             }
         }
+    };
+
+    apply_transform_source(&mut geometry, zoom, position_x, position_y);
+    geometry
+}
+
+fn finite_clamp(value: f64, default: f64, min: f64, max: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(min, max)
+    } else {
+        default
     }
+}
+
+fn apply_transform_source(
+    geometry: &mut PresentationGeometry,
+    zoom: f64,
+    position_x: f64,
+    position_y: f64,
+) {
+    let zoom = finite_clamp(zoom, 1.0, 1.0, 4.0);
+    let position_x = finite_clamp(position_x, 0.0, -1.0, 1.0);
+    let position_y = finite_clamp(position_y, 0.0, -1.0, 1.0);
+
+    if (zoom - 1.0).abs() < f64::EPSILON
+        && position_x.abs() < f64::EPSILON
+        && position_y.abs() < f64::EPSILON
+    {
+        return;
+    }
+
+    let render_width = geometry.render_width.max(1) as f64;
+    let render_height = geometry.render_height.max(1) as f64;
+
+    let base = geometry.viewport_source.unwrap_or(ViewportSource {
+        x: 0.0,
+        y: 0.0,
+        width: render_width,
+        height: render_height,
+    });
+
+    let width = (base.width / zoom).clamp(1.0, render_width);
+    let height = (base.height / zoom).clamp(1.0, render_height);
+
+    let centered_x =
+        (base.x + (base.width - width) / 2.0).clamp(0.0, (render_width - width).max(0.0));
+    let centered_y =
+        (base.y + (base.height - height) / 2.0).clamp(0.0, (render_height - height).max(0.0));
+
+    let max_x = (render_width - width).max(0.0);
+    let max_y = (render_height - height).max(0.0);
+
+    let x = if position_x < 0.0 {
+        centered_x + position_x * centered_x
+    } else {
+        centered_x + position_x * (max_x - centered_x)
+    };
+
+    let y = if position_y < 0.0 {
+        centered_y + position_y * centered_y
+    } else {
+        centered_y + position_y * (max_y - centered_y)
+    };
+
+    geometry.viewport_source =
+        Some(ViewportSource { x: x.clamp(0.0, max_x), y: y.clamp(0.0, max_y), width, height });
 }
 
 fn cover_source(
@@ -182,6 +263,9 @@ pub(crate) struct OutputState {
     pub(crate) fallback_height: u32,
     pub(crate) scale_mode: ScaleMode,
     pub(crate) render_size_override: Option<(u32, u32)>,
+    pub(crate) zoom: f64,
+    pub(crate) position_x: f64,
+    pub(crate) position_y: f64,
     pub(crate) geometry: PresentationGeometry,
 }
 
@@ -198,6 +282,9 @@ impl OutputState {
             fallback_height: 1080,
             scale_mode,
             render_size_override: None,
+            zoom: 1.0,
+            position_x: 0.0,
+            position_y: 0.0,
             geometry: PresentationGeometry {
                 render_width: 1920,
                 render_height: 1080,
@@ -230,6 +317,9 @@ impl OutputState {
             preferred_fractional_scale: self.preferred_fractional_scale,
             scale_mode: self.scale_mode,
             render_size_override: self.render_size_override,
+            zoom: self.zoom,
+            position_x: self.position_x,
+            position_y: self.position_y,
         });
     }
 
@@ -248,6 +338,9 @@ impl OutputState {
             frame_height.max(1),
             viewport_width,
             viewport_height,
+            self.zoom,
+            self.position_x,
+            self.position_y,
         )
     }
 }
@@ -360,6 +453,76 @@ mod tests {
         assert!(source.y >= 0.0);
         assert!(source.x + source.width <= 1920.0);
         assert!(source.y + source.height <= 1080.0);
+    }
+
+    #[test]
+    fn zoom_two_crops_about_the_center() {
+        let mut output = OutputState::new(ScaleMode::Stretch);
+        output.logical_width = 1920;
+        output.logical_height = 1080;
+        output.zoom = 2.0;
+        output.recompute_geometry();
+
+        let source = output.geometry.viewport_source.expect("zoom requires source crop");
+        assert!((source.x - 480.0).abs() < 0.001);
+        assert!((source.y - 270.0).abs() < 0.001);
+        assert!((source.width - 960.0).abs() < 0.001);
+        assert!((source.height - 540.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn pan_reaches_frame_edges_at_zoom_two() {
+        let mut output = OutputState::new(ScaleMode::Stretch);
+        output.logical_width = 1920;
+        output.logical_height = 1080;
+        output.zoom = 2.0;
+
+        output.position_x = -1.0;
+        output.position_y = -1.0;
+        output.recompute_geometry();
+        let top_left = output.geometry.viewport_source.expect("transformed crop");
+        assert!((top_left.x - 0.0).abs() < 0.001);
+        assert!((top_left.y - 0.0).abs() < 0.001);
+
+        output.position_x = 1.0;
+        output.position_y = 1.0;
+        output.recompute_geometry();
+        let bottom_right = output.geometry.viewport_source.expect("transformed crop");
+        assert!((bottom_right.x - 960.0).abs() < 0.001);
+        assert!((bottom_right.y - 540.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn cover_crop_can_pan_without_extra_zoom() {
+        let mut output = OutputState::new(ScaleMode::Cover);
+        output.logical_width = 1440;
+        output.logical_height = 2560;
+        output.render_size_override = Some((2560, 1440));
+
+        output.position_x = -1.0;
+        output.recompute_geometry();
+        let left = output.geometry.viewport_source.expect("cover crop");
+        assert!((left.x - 0.0).abs() < 0.001);
+        assert!((left.width - 810.0).abs() < 0.001);
+
+        output.position_x = 1.0;
+        output.recompute_geometry();
+        let right = output.geometry.viewport_source.expect("cover crop");
+        assert!((right.x - 1750.0).abs() < 0.001);
+        assert!((right.width - 810.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn invalid_transform_values_fall_back_to_neutral() {
+        let mut output = OutputState::new(ScaleMode::Stretch);
+        output.logical_width = 1920;
+        output.logical_height = 1080;
+        output.zoom = f64::NAN;
+        output.position_x = f64::INFINITY;
+        output.position_y = f64::NEG_INFINITY;
+        output.recompute_geometry();
+
+        assert!(output.geometry.viewport_source.is_none());
     }
 
     #[test]

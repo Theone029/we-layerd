@@ -188,6 +188,12 @@ pub struct RendererConfig {
     pub fill_mode: WallpaperFillMode,
     #[serde(default)]
     pub rotation_degrees: u32,
+    #[serde(default = "default_transform_zoom")]
+    pub zoom: f32,
+    #[serde(default)]
+    pub position_x: f32,
+    #[serde(default)]
+    pub position_y: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +260,10 @@ fn default_renderer_msaa_samples() -> u32 {
     1
 }
 
+fn default_transform_zoom() -> f32 {
+    1.0
+}
+
 fn default_media_integration() -> bool {
     true
 }
@@ -290,6 +300,9 @@ impl Default for RendererConfig {
             render_height: None,
             fill_mode: WallpaperFillMode::Cover,
             rotation_degrees: 0,
+            zoom: default_transform_zoom(),
+            position_x: 0.0,
+            position_y: 0.0,
         }
     }
 }
@@ -391,6 +404,9 @@ pub fn build_config_for_wallpaper(
     config.renderer.msaa_samples = wallpaper.msaa_samples.max(1);
     config.renderer.fill_mode = wallpaper.fill_mode;
     config.renderer.rotation_degrees = wallpaper.rotation_degrees.degrees();
+    config.renderer.zoom = wallpaper.zoom;
+    config.renderer.position_x = wallpaper.position_x;
+    config.renderer.position_y = wallpaper.position_y;
     match wallpaper.render_resolution {
         RenderResolution::Automatic => {
             config.renderer.render_width = None;
@@ -830,6 +846,9 @@ mod tests {
                 render_resolution: RenderResolution::Fixed { width: 2560, height: 1440 },
                 fill_mode: WallpaperFillMode::Fit,
                 rotation_degrees: Rotation::Deg90,
+                zoom: 1.75,
+                position_x: -0.25,
+                position_y: 0.5,
                 user_properties,
             },
         );
@@ -846,6 +865,9 @@ mod tests {
         assert_eq!(cfg.renderer.render_height, Some(1440));
         assert_eq!(cfg.renderer.fill_mode, WallpaperFillMode::Fit);
         assert_eq!(cfg.renderer.rotation_degrees, 90);
+        assert_eq!(cfg.renderer.zoom, 1.75);
+        assert_eq!(cfg.renderer.position_x, -0.25);
+        assert_eq!(cfg.renderer.position_y, 0.5);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(
                 cfg.renderer.options_json.as_deref().expect("source options"),

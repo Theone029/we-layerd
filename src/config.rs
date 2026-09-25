@@ -120,6 +120,12 @@ pub struct RendererConfig {
     pub fill_mode: WallpaperFillMode,
     #[serde(default)]
     pub rotation_degrees: u32,
+    #[serde(default = "default_transform_zoom")]
+    pub zoom: f32,
+    #[serde(default)]
+    pub position_x: f32,
+    #[serde(default)]
+    pub position_y: f32,
 }
 
 fn default_interactive() -> bool {
@@ -170,6 +176,10 @@ fn default_renderer_msaa_samples() -> u32 {
     1
 }
 
+fn default_transform_zoom() -> f32 {
+    1.0
+}
+
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
@@ -209,6 +219,9 @@ impl Default for RendererConfig {
             render_height: None,
             fill_mode: WallpaperFillMode::Cover,
             rotation_degrees: 0,
+            zoom: default_transform_zoom(),
+            position_x: 0.0,
+            position_y: 0.0,
         }
     }
 }

@@ -361,7 +361,11 @@ pub(crate) fn run_output(ctx: BackendContext<'_>, target_output: &str) -> Result
     let (options_json_present, options_json_len, options_json_valid) =
         cfg.renderer.options_json_diagnostics();
 
-    let output = OutputState::new(cfg.general.scale_mode);
+    let mut output = OutputState::new(cfg.general.scale_mode);
+    output.zoom = cfg.renderer.zoom as f64;
+    output.position_x = cfg.renderer.position_x as f64;
+    output.position_y = cfg.renderer.position_y as f64;
+    output.recompute_geometry();
     let presentation_geometry = output.geometry;
     let mut state = LayerShellState {
         output_name: target_output.to_string(),

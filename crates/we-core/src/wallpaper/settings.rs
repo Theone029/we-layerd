@@ -23,6 +23,12 @@ pub struct WallpaperSettings {
     pub fill_mode: WallpaperFillMode,
     #[serde(default)]
     pub rotation_degrees: Rotation,
+    #[serde(default = "default_zoom")]
+    pub zoom: f32,
+    #[serde(default)]
+    pub position_x: f32,
+    #[serde(default)]
+    pub position_y: f32,
     #[serde(default)]
     pub user_properties: BTreeMap<String, Value>,
 }
@@ -102,6 +108,9 @@ impl Default for WallpaperSettings {
             render_resolution: RenderResolution::Automatic,
             fill_mode: WallpaperFillMode::Cover,
             rotation_degrees: Rotation::Deg0,
+            zoom: default_zoom(),
+            position_x: 0.0,
+            position_y: 0.0,
             user_properties: BTreeMap::new(),
         }
     }
@@ -118,6 +127,10 @@ fn default_volume() -> f32 {
 }
 fn default_msaa_samples() -> u32 {
     1
+}
+
+fn default_zoom() -> f32 {
+    1.0
 }
 
 pub fn supports_final_output_msaa(wallpaper_type: WallpaperType) -> bool {
@@ -146,8 +159,36 @@ mod tests {
         assert_eq!(settings.render_resolution, RenderResolution::Automatic);
         assert_eq!(settings.fill_mode, WallpaperFillMode::Cover);
         assert_eq!(settings.rotation_degrees.degrees(), 0);
+        assert_eq!(settings.zoom, 1.0);
+        assert_eq!(settings.position_x, 0.0);
+        assert_eq!(settings.position_y, 0.0);
         assert_eq!(settings.fps, 60);
         assert_eq!(settings.msaa_samples, 1);
+    }
+
+    #[test]
+    fn legacy_settings_without_transform_fields_use_neutral_defaults() {
+        let settings: WallpaperSettings =
+            serde_json::from_str("{}").expect("legacy settings deserialize");
+        assert_eq!(settings.zoom, 1.0);
+        assert_eq!(settings.position_x, 0.0);
+        assert_eq!(settings.position_y, 0.0);
+    }
+
+    #[test]
+    fn transform_settings_round_trip() {
+        let settings = WallpaperSettings {
+            zoom: 1.75,
+            position_x: -0.25,
+            position_y: 0.5,
+            ..WallpaperSettings::default()
+        };
+        let encoded = serde_json::to_string(&settings).expect("serialize transform settings");
+        let decoded: WallpaperSettings =
+            serde_json::from_str(&encoded).expect("deserialize transform settings");
+        assert_eq!(decoded.zoom, 1.75);
+        assert_eq!(decoded.position_x, -0.25);
+        assert_eq!(decoded.position_y, 0.5);
     }
 
     #[test]
