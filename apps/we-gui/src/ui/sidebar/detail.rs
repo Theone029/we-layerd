@@ -38,6 +38,10 @@ pub enum DetailMessage {
     ResolutionHeightChanged(String),
     FillModeChanged(WallpaperFillMode),
     RotationChanged(Rotation),
+    ZoomChanged(f32),
+    PositionXChanged(f32),
+    PositionYChanged(f32),
+    ResetTransform,
     PropertyChanged { key: String, value: Value },
     PickPath { key: String, directory: bool },
     PathPicked { key: String, path: Option<String> },
@@ -310,6 +314,42 @@ fn actions_view<'a>(
                 .menu_style(md_menu_style),
             )
             .id("detail.scaling"),
+            text(language.text(Text::Transform)).size(15),
+            text(format!("{}  {:.0}%", language.text(Text::Zoom), settings.zoom * 100.0))
+                .size(13)
+                .color(Color::from_rgb8(196, 199, 204)),
+            container(
+                slider(1.0..=4.0, settings.zoom, DetailMessage::ZoomChanged)
+                    .step(0.01_f32)
+                    .style(md_slider_style)
+            )
+            .id("detail.transform.zoom"),
+            text(format!(
+                "{}  {:+.0}%",
+                language.text(Text::HorizontalPosition),
+                settings.position_x * 100.0
+            ))
+            .size(13)
+            .color(Color::from_rgb8(196, 199, 204)),
+            container(
+                slider(-1.0..=1.0, settings.position_x, DetailMessage::PositionXChanged)
+                    .step(0.01_f32)
+                    .style(md_slider_style)
+            )
+            .id("detail.transform.x"),
+            text(format!(
+                "{}  {:+.0}%",
+                language.text(Text::VerticalPosition),
+                settings.position_y * 100.0
+            ))
+            .size(13)
+            .color(Color::from_rgb8(196, 199, 204)),
+            container(
+                slider(-1.0..=1.0, settings.position_y, DetailMessage::PositionYChanged)
+                    .step(0.01_f32)
+                    .style(md_slider_style)
+            )
+            .id("detail.transform.y"),
             field_label(language.text(Text::Rotation)),
             container(
                 pick_list(
@@ -323,6 +363,12 @@ fn actions_view<'a>(
                 .menu_style(md_menu_style),
             )
             .id("detail.rotation"),
+            container(
+                button(text(format!("↺  {}", language.text(Text::ResetTransform))).size(13))
+                    .on_press(DetailMessage::ResetTransform)
+                    .style(outlined_button_style),
+            )
+            .id("detail.transform.reset"),
             field_label(language.text(Text::FinalOutputMsaa)),
             msaa_control,
         ]

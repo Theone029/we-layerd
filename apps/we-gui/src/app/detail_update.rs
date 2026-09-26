@@ -1,5 +1,5 @@
 use iced::Task;
-use we_core::wallpaper::settings::{RenderResolution, WallpaperSettings};
+use we_core::wallpaper::settings::{RenderResolution, Rotation, WallpaperSettings};
 
 use crate::{
     domain::runtime_status::RuntimeStatus,
@@ -90,6 +90,10 @@ pub(crate) fn update(app: &mut App, message: wallpaper_detail::DetailMessage) ->
         }
         DetailMessage::FillModeChanged(value) => profile.fill_mode = value,
         DetailMessage::RotationChanged(value) => profile.rotation_degrees = value,
+        DetailMessage::ZoomChanged(value) => profile.zoom = bounded_zoom(value),
+        DetailMessage::PositionXChanged(value) => profile.position_x = bounded_position(value),
+        DetailMessage::PositionYChanged(value) => profile.position_y = bounded_position(value),
+        DetailMessage::ResetTransform => reset_transform(profile),
         DetailMessage::PropertyChanged { key, value } => {
             profile.user_properties.insert(key, value);
         }
@@ -108,6 +112,29 @@ pub(crate) fn update(app: &mut App, message: wallpaper_detail::DetailMessage) ->
         eprintln!("failed to save config: {error}");
     }
     Task::none()
+}
+
+fn bounded_zoom(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(1.0, 4.0)
+    } else {
+        1.0
+    }
+}
+
+fn bounded_position(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(-1.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+fn reset_transform(profile: &mut WallpaperSettings) {
+    profile.zoom = 1.0;
+    profile.position_x = 0.0;
+    profile.position_y = 0.0;
+    profile.rotation_degrees = Rotation::Deg0;
 }
 
 fn sync_fixed_resolution(profile: &mut WallpaperSettings, width: &str, height: &str) {
@@ -153,4 +180,41 @@ pub(crate) fn persist_playback_config(app: &App) -> Result<(), String> {
     };
 
     config::persist_selected(&app.config_path, &app.launch_settings, entry)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bounded_position, bounded_zoom, reset_transform};
+    use we_core::wallpaper::settings::{Rotation, WallpaperFillMode, WallpaperSettings};
+
+    #[test]
+    fn transform_controls_use_backend_bounds() {
+        assert_eq!(bounded_zoom(0.5), 1.0);
+        assert_eq!(bounded_zoom(2.0), 2.0);
+        assert_eq!(bounded_zoom(8.0), 4.0);
+        assert_eq!(bounded_zoom(f32::NAN), 1.0);
+
+        assert_eq!(bounded_position(-2.0), -1.0);
+        assert_eq!(bounded_position(0.25), 0.25);
+        assert_eq!(bounded_position(2.0), 1.0);
+        assert_eq!(bounded_position(f32::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn reset_transform_preserves_non_transform_settings() {
+        let mut profile = WallpaperSettings::default();
+        profile.zoom = 3.0;
+        profile.position_x = -0.8;
+        profile.position_y = 0.6;
+        profile.rotation_degrees = Rotation::Deg270;
+        profile.fill_mode = WallpaperFillMode::Fit;
+
+        reset_transform(&mut profile);
+
+        assert_eq!(profile.zoom, 1.0);
+        assert_eq!(profile.position_x, 0.0);
+        assert_eq!(profile.position_y, 0.0);
+        assert_eq!(profile.rotation_degrees, Rotation::Deg0);
+        assert_eq!(profile.fill_mode, WallpaperFillMode::Fit);
+    }
 }

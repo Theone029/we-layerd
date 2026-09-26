@@ -259,6 +259,11 @@ pub(crate) enum Text {
     Height,
     Scaling,
     Rotation,
+    Transform,
+    Zoom,
+    HorizontalPosition,
+    VerticalPosition,
+    ResetTransform,
     FinalOutputMsaa,
     Msaa1x,
     Msaa2x,
@@ -359,6 +364,8 @@ mod tests {
             assert!(!language.text(Text::ApplyToDisplays).is_empty());
             assert!(!language.text(Text::NoWaylandDisplaysDetected).is_empty());
             assert!(!language.text(Text::RuntimeStatus).is_empty());
+            assert!(!language.text(Text::Transform).is_empty());
+            assert!(!language.text(Text::ResetTransform).is_empty());
         }
     }
 }
