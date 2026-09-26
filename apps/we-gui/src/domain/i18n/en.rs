@@ -122,10 +122,12 @@ pub(super) fn text(key: Text) -> &'static str {
         Text::VerticalPosition => "Vertical position",
         Text::ResetTransform => "Reset transform",
         Text::AddCustomWallpaper => "Add wallpaper",
+        Text::ChooseImage => "Choose image",
+        Text::LoadingImage => "Loading image…",
         Text::CustomImageEditor => "Custom image editor",
         Text::NoCustomImageSelected => "No image selected",
         Text::SecureImageIngressPending => {
-            "File selection will be enabled by the secure desktop ingress bridge."
+            "Images are selected through the isolated desktop ingress broker."
         }
         Text::TargetResolution => "Target resolution",
         Text::FinalOutputMsaa => "Final-output MSAA",

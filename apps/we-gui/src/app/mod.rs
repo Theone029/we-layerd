@@ -129,6 +129,9 @@ mod tests {
             detail_tab: DetailTab::Actions,
 
             still_editor: crate::domain::still_editor::StillEditorState::default(),
+            still_editor_draft: None,
+            still_editor_error: None,
+            still_editor_busy: false,
             playback_paused: false,
             playback_running: false,
             search_query: String::new(),
@@ -238,6 +241,9 @@ mod tests {
             detail_tab: DetailTab::Actions,
 
             still_editor: crate::domain::still_editor::StillEditorState::default(),
+            still_editor_draft: None,
+            still_editor_error: None,
+            still_editor_busy: false,
             playback_paused: false,
             playback_running: true,
             search_query: String::new(),

@@ -1,4 +1,5 @@
 pub mod config;
+pub mod ingress;
 pub mod install_layout;
 pub mod playlist;
 pub mod presentation;

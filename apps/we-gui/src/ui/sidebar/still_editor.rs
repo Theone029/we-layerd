@@ -1,7 +1,9 @@
 use iced::{
     alignment::{Horizontal, Vertical},
-    widget::{button, column, container, pick_list, row, scrollable, slider, text, text_input},
-    Background, Border, Color, Element, Fill, Theme,
+    widget::{
+        button, column, container, image, pick_list, row, scrollable, slider, text, text_input,
+    },
+    Background, Border, Color, ContentFit, Element, Fill, Theme,
 };
 use we_core::{config::ScaleMode, wallpaper::settings::Rotation};
 
@@ -13,6 +15,7 @@ use crate::domain::{
 #[derive(Debug, Clone)]
 pub(crate) enum StillEditorMessage {
     Close,
+    ChooseImage,
     TitleChanged(String),
     TargetWidthChanged(String),
     TargetHeightChanged(String),
@@ -24,24 +27,37 @@ pub(crate) enum StillEditorMessage {
     ResetTransform,
 }
 
-pub(crate) fn view(
-    state: &StillEditorState,
+pub(crate) fn view<'a>(
+    state: &'a StillEditorState,
+    preview: Option<&'a image::Handle>,
+    busy: bool,
+    error: Option<&'a str>,
     language: Language,
-) -> Element<'_, StillEditorMessage> {
-    let preview = preview_panel(state, language);
+) -> Element<'a, StillEditorMessage> {
+    let preview = preview_panel(state, preview, language);
 
     let target = section(
         language.text(Text::TargetResolution),
         column![
             row![
-                text_input(language.text(Text::Width), &state.target_width)
-                    .on_input(StillEditorMessage::TargetWidthChanged)
-                    .padding([12, 10])
-                    .width(Fill),
-                text_input(language.text(Text::Height), &state.target_height)
-                    .on_input(StillEditorMessage::TargetHeightChanged)
-                    .padding([12, 10])
-                    .width(Fill),
+                text_input(
+                    language.text(Text::Width),
+                    &state.target_width
+                )
+                .on_input(
+                    StillEditorMessage::TargetWidthChanged
+                )
+                .padding([12, 10])
+                .width(Fill),
+                text_input(
+                    language.text(Text::Height),
+                    &state.target_height
+                )
+                .on_input(
+                    StillEditorMessage::TargetHeightChanged
+                )
+                .padding([12, 10])
+                .width(Fill),
             ]
             .spacing(8),
             text(language.text(Text::Scaling)).size(13),
@@ -101,6 +117,21 @@ pub(crate) fn view(
         .spacing(10),
     );
 
+    let source_status = match state.source_dimensions {
+        Some((width, height)) => {
+            format!("{width} × {height}")
+        }
+        None => language.text(Text::NoCustomImageSelected).to_string(),
+    };
+
+    let choose_label =
+        if busy { language.text(Text::LoadingImage) } else { language.text(Text::ChooseImage) };
+
+    let choose_button = button(text(choose_label)).padding([10, 14]);
+
+    let choose_button =
+        if busy { choose_button } else { choose_button.on_press(StillEditorMessage::ChooseImage) };
+
     let source = section(
         language.text(Text::CustomImageEditor),
         column![
@@ -108,11 +139,12 @@ pub(crate) fn view(
                 .on_input(StillEditorMessage::TitleChanged)
                 .padding([12, 10])
                 .width(Fill),
-            text(language.text(Text::NoCustomImageSelected)).size(14),
+            text(source_status).size(14),
             text(language.text(Text::SecureImageIngressPending))
                 .size(12)
                 .color(Color::from_rgb8(170, 174, 184)),
-            button(text(language.text(Text::AddCustomWallpaper))).padding([10, 14]),
+            choose_button,
+            text(error.unwrap_or("")).size(12).color(Color::from_rgb8(255, 180, 171)),
         ]
         .spacing(10),
     );
@@ -137,6 +169,7 @@ pub(crate) fn view(
 
 fn preview_panel<'a>(
     state: &'a StillEditorState,
+    preview: Option<&'a image::Handle>,
     language: Language,
 ) -> Element<'a, StillEditorMessage> {
     let (target_width, target_height) = state.target_extent();
@@ -147,7 +180,7 @@ fn preview_panel<'a>(
                 .viewport_source
                 .map(|source| {
                     format!(
-                        " crop {:.0},{:.0} {:.0}×{:.0}",
+                        "  crop {:.0},{:.0} {:.0}×{:.0}",
                         source.x, source.y, source.width, source.height
                     )
                 })
@@ -162,6 +195,7 @@ fn preview_panel<'a>(
                 source,
             )
         }
+
         None => format!(
             "{} — {}×{}",
             language.text(Text::NoCustomImageSelected),
@@ -170,18 +204,33 @@ fn preview_panel<'a>(
         ),
     };
 
+    let visual: Element<'a, StillEditorMessage> = match preview {
+        Some(handle) => container(
+            image(handle.clone()).content_fit(ContentFit::Contain).width(Fill).height(Fill),
+        )
+        .height(170)
+        .width(Fill)
+        .into(),
+
+        None => container(text(language.text(Text::NoCustomImageSelected)).size(14))
+            .height(170)
+            .width(Fill)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .into(),
+    };
+
     container(
         column![
-            text("Preview").size(16),
+            text("Source preview").size(16),
+            visual,
             text(summary).size(12).color(Color::from_rgb8(190, 194, 202)),
         ]
         .spacing(8)
         .align_x(Horizontal::Center),
     )
     .width(Fill)
-    .height(220)
-    .align_x(Horizontal::Center)
-    .align_y(Vertical::Center)
+    .padding(12)
     .style(preview_style)
     .into()
 }

@@ -23,7 +23,10 @@ use crate::{
         ui_state::{AnimatedPreview, Sidebar},
     },
     platform::tray,
-    services::{autostart, config, preferences, runtime, wallpaper as wallpaper_service},
+    services::{
+        autostart, config, preferences, runtime, still_import, still_ingress,
+        wallpaper as wallpaper_service,
+    },
     ui::sidebar::detail as wallpaper_detail,
 };
 
@@ -42,12 +45,81 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::ScanCompleted(generation, result) => finish_library_scan(app, generation, result),
         Message::AddWallpaperPressed => {
+            if let Some(draft) = app.still_editor_draft.take() {
+                still_ingress::discard_staged(&draft.source_path);
+            }
+
             app.still_editor = crate::domain::still_editor::StillEditorState::default();
+            app.still_editor_error = None;
+            app.still_editor_busy = false;
             app.sidebar = Some(Sidebar::StillEditor);
             app.show_settings = false;
             Task::none()
         }
+
         Message::StillEditor(message) => super::still_editor_update::update(app, message),
+
+        Message::StillIngressPicked(result) => {
+            app.still_editor_busy = false;
+
+            match result {
+                Ok(None) => Task::none(),
+
+                Err(error) => {
+                    app.still_editor_error = Some(error);
+                    Task::none()
+                }
+
+                Ok(Some(selection)) => {
+                    if let Some(draft) = app.still_editor_draft.take() {
+                        still_ingress::discard_staged(&draft.source_path);
+                    }
+
+                    app.still_editor.source_dimensions = None;
+                    app.still_editor_error = None;
+                    app.still_editor_busy = true;
+
+                    let staged_path = selection.source_path.clone();
+                    let display_name = selection.display_name;
+
+                    Task::perform(still_import::inspect(selection.source_path), move |result| {
+                        Message::StillDraftInspected { staged_path, display_name, result }
+                    })
+                }
+            }
+        }
+
+        Message::StillDraftInspected { staged_path, display_name, result } => {
+            app.still_editor_busy = false;
+
+            match result {
+                Ok(draft) => {
+                    let title = Path::new(&display_name)
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("Custom wallpaper");
+
+                    app.still_editor.title = title.chars().take(160).collect();
+
+                    app.still_editor.source_dimensions = Some((draft.width, draft.height));
+
+                    app.still_editor_error = None;
+                    app.still_editor_draft = Some(draft);
+                }
+
+                Err(error) => {
+                    still_ingress::discard_staged(&staged_path);
+
+                    app.still_editor.source_dimensions = None;
+                    app.still_editor_draft = None;
+                    app.still_editor_error = Some(error);
+                }
+            }
+
+            Task::none()
+        }
         Message::SelectWallpaper(index) => {
             if !select_wallpaper(app, index, true) {
                 return Task::none();

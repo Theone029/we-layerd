@@ -265,6 +265,8 @@ pub(crate) enum Text {
     VerticalPosition,
     ResetTransform,
     AddCustomWallpaper,
+    ChooseImage,
+    LoadingImage,
     CustomImageEditor,
     NoCustomImageSelected,
     SecureImageIngressPending,

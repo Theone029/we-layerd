@@ -19,7 +19,7 @@ const SOURCE_FILE_NAME: &str = "source.png";
 const PREVIEW_FILE_NAME: &str = "preview.png";
 const PROJECT_FILE_NAME: &str = "project.json";
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct StillImageDraft {
     pub(crate) source_path: PathBuf,
     pub(crate) title: String,

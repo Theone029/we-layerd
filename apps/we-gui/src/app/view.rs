@@ -67,9 +67,14 @@ fn sidebar_view(app: &App, sidebar: Sidebar) -> Element<'_, Message> {
             app.autostart_pending,
             app.autostart_error.as_deref(),
         ),
-        Sidebar::StillEditor => {
-            still_editor::view(&app.still_editor, app.language).map(Message::StillEditor)
-        }
+        Sidebar::StillEditor => still_editor::view(
+            &app.still_editor,
+            app.still_editor_draft.as_ref().map(|draft| &draft.preview),
+            app.still_editor_busy,
+            app.still_editor_error.as_deref(),
+            app.language,
+        )
+        .map(Message::StillEditor),
         Sidebar::Playlist => playlist::view(app),
         Sidebar::Profile => profile::view(app),
         Sidebar::Detail => match app
