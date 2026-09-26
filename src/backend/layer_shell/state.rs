@@ -173,26 +173,16 @@ pub(crate) struct LayerShellState {
     pub(super) discovered_output_names: BTreeMap<u32, String>,
 }
 
-fn normalized_axis_margins(canvas: u32, destination: u32, position: f64) -> (i32, i32) {
-    let slack = canvas.saturating_sub(destination) as i64;
+fn normalized_axis_offset(canvas: u32, destination: u32, position: f64) -> i32 {
+    let slack = canvas.saturating_sub(destination);
     if slack == 0 {
-        return (0, 0);
+        return 0;
     }
 
     let position = if position.is_finite() { position.clamp(-1.0, 1.0) } else { 0.0 };
 
-    // -1 -> leading edge, 0 -> centered, +1 -> trailing edge.
-    let target = (slack as f64 * ((position + 1.0) / 2.0)).round() as i64;
-
-    // With opposite anchors and a fixed surface size, equal margins preserve
-    // centering. Their difference translates that centered rectangle.
-    let delta = (2 * target) - slack;
-
-    if delta >= 0 {
-        (delta.min(i32::MAX as i64) as i32, 0)
-    } else {
-        (0, (-delta).min(i32::MAX as i64) as i32)
-    }
+    // -1 = leading edge, 0 = center, +1 = trailing edge.
+    (slack as f64 * ((position + 1.0) / 2.0)).round().clamp(0.0, i32::MAX as f64) as i32
 }
 
 fn presentation_margins(
@@ -203,10 +193,12 @@ fn presentation_margins(
     position_x: f64,
     position_y: f64,
 ) -> (i32, i32, i32, i32) {
-    let (left, right) = normalized_axis_margins(canvas_width, destination_width, position_x);
-    let (top, bottom) = normalized_axis_margins(canvas_height, destination_height, position_y);
+    let left = normalized_axis_offset(canvas_width, destination_width, position_x);
+    let top = normalized_axis_offset(canvas_height, destination_height, position_y);
 
-    (top, right, bottom, left)
+    // Surface is anchored Top|Left, so these are absolute offsets
+    // within the logical output canvas.
+    (top, 0, 0, left)
 }
 
 impl LayerShellState {
@@ -275,6 +267,9 @@ impl LayerShellState {
             let width = geometry.viewport_width.max(1);
             let height = geometry.viewport_height.max(1);
 
+            use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor;
+
+            layer_surface.set_anchor(Anchor::Top | Anchor::Left);
             layer_surface.set_size(width, height);
 
             let (top, right, bottom, left) = presentation_margins(
@@ -562,17 +557,29 @@ mod tests {
 
 #[cfg(test)]
 mod presentation_layout_tests {
-    use super::presentation_margins;
+    use super::{normalized_axis_offset, presentation_margins};
 
     #[test]
-    fn centered_destination_needs_no_margins() {
-        assert_eq!(presentation_margins(1920, 1080, 960, 540, 0.0, 0.0), (0, 0, 0, 0));
+    fn normalized_axis_offset_maps_edges_and_center() {
+        assert_eq!(normalized_axis_offset(1920, 960, -1.0), 0);
+        assert_eq!(normalized_axis_offset(1920, 960, 0.0), 480);
+        assert_eq!(normalized_axis_offset(1920, 960, 1.0), 960);
+    }
+
+    #[test]
+    fn centered_destination_uses_explicit_top_left_offsets() {
+        assert_eq!(presentation_margins(1920, 1080, 960, 540, 0.0, 0.0), (270, 0, 0, 480));
     }
 
     #[test]
     fn normalized_position_reaches_all_destination_edges() {
-        assert_eq!(presentation_margins(1920, 1080, 960, 540, -1.0, -1.0), (0, 960, 540, 0));
+        assert_eq!(presentation_margins(1920, 1080, 960, 540, -1.0, -1.0), (0, 0, 0, 0));
 
         assert_eq!(presentation_margins(1920, 1080, 960, 540, 1.0, 1.0), (540, 0, 0, 960));
+    }
+
+    #[test]
+    fn full_canvas_destination_has_no_position_slack() {
+        assert_eq!(presentation_margins(1920, 1080, 1920, 1080, 1.0, -1.0), (0, 0, 0, 0));
     }
 }
