@@ -13,7 +13,10 @@ use we_core::wallpaper::{
 
 use crate::{
     domain::{
-        library_grid::{bounded_animation_candidates, gif_result_is_current, grid_window},
+        library_grid::{
+            bounded_animation_candidates, filtered_entry_indices, gif_result_is_current,
+            grid_window, LibrarySortMode,
+        },
         library_scan::ScanRequest,
         playlist_editor::{
             self, add_wallpaper, create_playlist, delete_playlist, move_entry, remove_entry,
@@ -245,6 +248,30 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::TypeFilterSelected(value) => {
             app.type_filter = value;
+            app.library_scroll_y = 0.0;
+            refresh_filtered_entries(app);
+            Task::batch(vec![
+                refresh_visible_gif_previews(app),
+                iced::widget::operation::scroll_to(
+                    "library.scroll",
+                    iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+                ),
+            ])
+        }
+        Message::LibrarySortSelected(value) => {
+            app.library_sort = value;
+            app.library_scroll_y = 0.0;
+            refresh_filtered_entries(app);
+            Task::batch(vec![
+                refresh_visible_gif_previews(app),
+                iced::widget::operation::scroll_to(
+                    "library.scroll",
+                    iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+                ),
+            ])
+        }
+        Message::ImportedFilterToggled(value) => {
+            app.imported_only = value;
             app.library_scroll_y = 0.0;
             refresh_filtered_entries(app);
             Task::batch(vec![
@@ -973,22 +1000,39 @@ fn finish_library_scan(
             app.animated_previews.clear();
             app.gif_preview_desired.clear();
             app.gif_preview_failed.clear();
-            app.library_scroll_y = 0.0;
+
+            let pending_import = app.still_import_pending_id.clone();
+            let imported_index = pending_import.as_deref().and_then(|imported_id| {
+                app.entries.iter().position(|entry| entry.id == imported_id)
+            });
+
+            // A successful import is an explicit navigation event: make the new
+            // item immediately visible. Ordinary rescans no longer destroy the
+            // user's current library scroll position.
+            if imported_index.is_some() {
+                app.search_query.clear();
+                app.type_filter = None;
+                app.imported_only = false;
+                app.library_sort = LibrarySortMode::Recent;
+                app.library_scroll_y = 0.0;
+            }
+
             refresh_filtered_entries(app);
 
-            if let Some(imported_id) = app.still_import_pending_id.clone() {
-                if let Some(index) = app.entries.iter().position(|entry| entry.id == imported_id) {
-                    app.still_import_pending_id = None;
-                    let _ = select_wallpaper(app, index, true);
-                }
+            if let Some(index) = imported_index {
+                app.still_import_pending_id = None;
+                let _ = select_wallpaper(app, index, true);
             }
 
             tasks.push(refresh_visible_gif_previews(app));
             tasks.push(migrate_legacy_shuffle_if_needed(app));
-            tasks.push(iced::widget::operation::scroll_to(
-                "library.scroll",
-                iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
-            ));
+
+            if imported_index.is_some() {
+                tasks.push(iced::widget::operation::scroll_to(
+                    "library.scroll",
+                    iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+                ));
+            }
         }
     }
 
@@ -1004,18 +1048,12 @@ fn finish_library_scan(
 }
 
 fn refresh_filtered_entries(app: &mut App) {
-    let query = app.search_query.to_lowercase();
-    let type_filter = app.type_filter;
-    app.filtered_entry_indices.clear();
-    app.filtered_entry_indices.extend(
-        app.entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                type_filter.map_or(true, |ty| entry.ty == ty)
-                    && (query.is_empty() || entry.title.to_lowercase().contains(&query))
-            })
-            .map(|(index, _)| index),
+    app.filtered_entry_indices = filtered_entry_indices(
+        &app.entries,
+        &app.search_query,
+        app.type_filter,
+        app.imported_only,
+        app.library_sort,
     );
 }
 

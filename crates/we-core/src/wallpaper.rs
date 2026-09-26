@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    time::UNIX_EPOCH,
 };
 
 use anyhow::{Context, Result};
@@ -25,6 +26,12 @@ pub struct WallpaperEntry {
     pub ty: WallpaperType,
     pub preview: Option<PathBuf>,
     pub source_file: Option<PathBuf>,
+    /// Cached source filename for search without filesystem I/O on each keystroke.
+    pub source_name: Option<String>,
+    /// Locally imported items use a reserved local-* identity namespace.
+    pub imported: bool,
+    /// Project-file modification time, cached during scan for Recent sorting.
+    pub recent_key: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +70,19 @@ pub fn scan_workshop_wallpapers(workshop_app_root: &Path) -> Result<Vec<Wallpape
         let source_file =
             if meta.file.trim().is_empty() { None } else { Some(path.join(meta.file)) };
         let preview = detect_preview_image(&path);
+        let source_name = source_file
+            .as_ref()
+            .and_then(|source| source.file_name())
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned);
+        let imported = id.starts_with("local-image-") || id.starts_with("local-media-");
+        let recent_key = fs::metadata(&project_json)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+
         result.push(WallpaperEntry {
             id,
             project_json,
@@ -70,6 +90,9 @@ pub fn scan_workshop_wallpapers(workshop_app_root: &Path) -> Result<Vec<Wallpape
             ty,
             preview,
             source_file,
+            source_name,
+            imported,
+            recent_key,
         });
     }
 

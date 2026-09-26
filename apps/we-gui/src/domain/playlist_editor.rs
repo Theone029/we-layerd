@@ -227,6 +227,9 @@ mod tests {
             ty,
             preview: None,
             source_file: None,
+            source_name: None,
+            imported: false,
+            recent_key: 0,
         }
     }
 

@@ -39,6 +39,7 @@ mod tests {
     use crate::{
         domain::{
             i18n::Language,
+            library_grid::LibrarySortMode,
             playlist_editor::LegacyShuffleMigration,
             runtime_status::RuntimeStatus,
             settings::{ScaleModeOption, UiSettings},
@@ -137,6 +138,8 @@ mod tests {
             playback_running: false,
             search_query: String::new(),
             type_filter: None,
+            library_sort: LibrarySortMode::Recent,
+            imported_only: false,
             filtered_entry_indices: Vec::new(),
             panes: pane_grid::State::with_configuration(pane_grid::Configuration::Pane(
                 Pane::Library,
@@ -250,6 +253,8 @@ mod tests {
             playback_running: true,
             search_query: String::new(),
             type_filter: None,
+            library_sort: LibrarySortMode::Recent,
+            imported_only: false,
             filtered_entry_indices: Vec::new(),
             panes: pane_grid::State::with_configuration(pane_grid::Configuration::Pane(
                 Pane::Library,

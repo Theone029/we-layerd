@@ -14,6 +14,7 @@ use we_core::{
 use crate::{
     domain::{
         i18n::Language,
+        library_grid::LibrarySortMode,
         library_scan::LibraryScanScheduler,
         playlist_editor::{LegacyShuffleMigration, MoveDirection},
         runtime_status::RuntimeStatus,
@@ -52,6 +53,8 @@ pub(crate) struct App {
     pub playback_running: bool,
     pub search_query: String,
     pub type_filter: Option<WallpaperType>,
+    pub library_sort: LibrarySortMode,
+    pub imported_only: bool,
     pub filtered_entry_indices: Vec<usize>,
     pub panes: pane_grid::State<Pane>,
     pub animated_previews: HashMap<PathBuf, AnimatedPreview>,
@@ -193,6 +196,8 @@ pub(crate) enum Message {
     },
     SearchChanged(String),
     TypeFilterSelected(Option<WallpaperType>),
+    LibrarySortSelected(LibrarySortMode),
+    ImportedFilterToggled(bool),
     PaneResized(pane_grid::ResizeEvent),
     AssetsPathChanged(String),
     WorkshopPathChanged(String),

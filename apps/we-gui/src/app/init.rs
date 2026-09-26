@@ -9,6 +9,7 @@ use we_core::{
 
 use crate::{
     domain::{
+        library_grid::LibrarySortMode,
         playlist_editor::LegacyShuffleMigration,
         runtime_status::RuntimeStatus,
         settings::{ScaleModeOption, UiSettings},
@@ -112,6 +113,8 @@ pub(crate) fn initialize() -> (App, Task<Message>) {
             playback_running: false,
             search_query: String::new(),
             type_filter: None,
+            library_sort: LibrarySortMode::Recent,
+            imported_only: false,
             filtered_entry_indices: Vec::new(),
             panes: pane_grid::State::with_configuration(pane_grid::Configuration::Split {
                 axis: pane_grid::Axis::Vertical,

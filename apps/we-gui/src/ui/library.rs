@@ -11,7 +11,7 @@ use crate::{
     app::{App, Message},
     domain::{
         i18n::{Language, Text},
-        library_grid::{grid_window, GridWindow},
+        library_grid::{grid_window, GridWindow, LibrarySortMode},
         ui_state::AnimatedPreview,
     },
 };
@@ -52,6 +52,16 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
             language,
         )
     });
+    let organize = row![
+        text("Sort").size(13),
+        sort_chip("Recent", LibrarySortMode::Recent, app.library_sort),
+        sort_chip("Name", LibrarySortMode::Name, app.library_sort),
+        sort_chip("Type", LibrarySortMode::Type, app.library_sort),
+        imported_chip(app.imported_only),
+    ]
+    .spacing(8)
+    .align_y(Vertical::Center);
+
     let filters = row![
         filter_chip(
             language.text(Text::FilterAll),
@@ -132,6 +142,7 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
             ]
             .spacing(12)
             .align_y(Vertical::Center),
+            organize,
             scrollable(grid)
                 .id("library.scroll")
                 .on_scroll(|viewport| {
@@ -318,6 +329,84 @@ fn search_style(_theme: &Theme, status: text_input::Status) -> text_input::Style
         value: Color::from_rgb8(230, 225, 229),
         selection: Color::from_rgb8(78, 99, 139),
     }
+}
+
+fn sort_chip<'a>(
+    label: &'a str,
+    value: LibrarySortMode,
+    current: LibrarySortMode,
+) -> Element<'a, Message> {
+    let selected = value == current;
+
+    container(
+        button(text(label).size(13))
+            .on_press(Message::LibrarySortSelected(value))
+            .padding([7, 12])
+            .style(move |_theme, status| {
+                let background = if selected {
+                    Color::from_rgb8(70, 91, 129)
+                } else if matches!(status, button::Status::Hovered) {
+                    Color::from_rgb8(54, 56, 62)
+                } else {
+                    Color::TRANSPARENT
+                };
+
+                button::Style {
+                    background: Some(Background::Color(background)),
+                    text_color: if selected {
+                        Color::from_rgb8(222, 231, 255)
+                    } else {
+                        Color::from_rgb8(201, 203, 209)
+                    },
+                    border: Border {
+                        radius: 20.0.into(),
+                        width: if selected { 0.0 } else { 1.0 },
+                        color: Color::from_rgb8(143, 147, 156),
+                    },
+                    ..Default::default()
+                }
+            }),
+    )
+    .id(match value {
+        LibrarySortMode::Recent => "library.sort.recent",
+        LibrarySortMode::Name => "library.sort.name",
+        LibrarySortMode::Type => "library.sort.type",
+    })
+    .into()
+}
+
+fn imported_chip(selected: bool) -> Element<'static, Message> {
+    container(
+        button(text("Imported").size(13))
+            .on_press(Message::ImportedFilterToggled(!selected))
+            .padding([7, 12])
+            .style(move |_theme, status| {
+                let background = if selected {
+                    Color::from_rgb8(70, 91, 129)
+                } else if matches!(status, button::Status::Hovered) {
+                    Color::from_rgb8(54, 56, 62)
+                } else {
+                    Color::TRANSPARENT
+                };
+
+                button::Style {
+                    background: Some(Background::Color(background)),
+                    text_color: if selected {
+                        Color::from_rgb8(222, 231, 255)
+                    } else {
+                        Color::from_rgb8(201, 203, 209)
+                    },
+                    border: Border {
+                        radius: 20.0.into(),
+                        width: if selected { 0.0 } else { 1.0 },
+                        color: Color::from_rgb8(143, 147, 156),
+                    },
+                    ..Default::default()
+                }
+            }),
+    )
+    .id("library.filter.imported")
+    .into()
 }
 
 fn filter_chip<'a>(

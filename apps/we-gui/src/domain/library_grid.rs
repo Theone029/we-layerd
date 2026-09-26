@@ -1,3 +1,80 @@
+use we_core::wallpaper::{WallpaperEntry, WallpaperType};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LibrarySortMode {
+    Recent,
+    Name,
+    Type,
+}
+
+impl Default for LibrarySortMode {
+    fn default() -> Self {
+        Self::Recent
+    }
+}
+
+pub(crate) fn filtered_entry_indices(
+    entries: &[WallpaperEntry],
+    query: &str,
+    type_filter: Option<WallpaperType>,
+    imported_only: bool,
+    sort_mode: LibrarySortMode,
+) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+
+    let mut indices = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| {
+            let type_matches = type_filter.map_or(true, |ty| entry.ty == ty);
+            let imported_matches = !imported_only || entry.imported;
+            let query_matches = query.is_empty()
+                || entry.title.to_lowercase().contains(&query)
+                || entry.id.to_lowercase().contains(&query)
+                || entry
+                    .source_name
+                    .as_deref()
+                    .is_some_and(|name| name.to_lowercase().contains(&query));
+
+            type_matches && imported_matches && query_matches
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+
+    indices.sort_by(|left_index, right_index| {
+        let left = &entries[*left_index];
+        let right = &entries[*right_index];
+
+        match sort_mode {
+            LibrarySortMode::Recent => right
+                .recent_key
+                .cmp(&left.recent_key)
+                .then_with(|| left.title.to_lowercase().cmp(&right.title.to_lowercase()))
+                .then_with(|| left.id.cmp(&right.id)),
+            LibrarySortMode::Name => left
+                .title
+                .to_lowercase()
+                .cmp(&right.title.to_lowercase())
+                .then_with(|| left.id.cmp(&right.id)),
+            LibrarySortMode::Type => wallpaper_type_rank(left.ty)
+                .cmp(&wallpaper_type_rank(right.ty))
+                .then_with(|| left.title.to_lowercase().cmp(&right.title.to_lowercase()))
+                .then_with(|| left.id.cmp(&right.id)),
+        }
+    });
+
+    indices
+}
+
+fn wallpaper_type_rank(ty: WallpaperType) -> u8 {
+    match ty {
+        WallpaperType::Video => 0,
+        WallpaperType::Scene => 1,
+        WallpaperType::Web => 2,
+        WallpaperType::Unknown => 3,
+    }
+}
+
 const GRID_SPACING: f32 = 12.0;
 const GRID_PADDING: f32 = 12.0;
 const TARGET_CARD_WIDTH: f32 = 360.0;
@@ -106,10 +183,81 @@ pub(crate) fn bounded_animation_candidates<T>(candidates: impl IntoIterator<Item
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{
-        bounded_animation_candidates, gif_result_is_current, gif_tick_needed, grid_window,
-        MAX_ANIMATED_PREVIEWS,
+        bounded_animation_candidates, filtered_entry_indices, gif_result_is_current,
+        gif_tick_needed, grid_window, LibrarySortMode, MAX_ANIMATED_PREVIEWS,
     };
+    use we_core::wallpaper::{WallpaperEntry, WallpaperType};
+
+    fn entry(
+        id: &str,
+        title: &str,
+        ty: WallpaperType,
+        source_name: &str,
+        imported: bool,
+        recent_key: u64,
+    ) -> WallpaperEntry {
+        WallpaperEntry {
+            id: id.to_string(),
+            project_json: PathBuf::from(format!("/private/{id}/project.json")),
+            title: title.to_string(),
+            ty,
+            preview: None,
+            source_file: Some(PathBuf::from(format!("/private/{id}/{source_name}"))),
+            source_name: Some(source_name.to_string()),
+            imported,
+            recent_key,
+        }
+    }
+
+    #[test]
+    fn recent_sort_puts_new_import_first_and_imported_filter_is_exact() {
+        let entries = vec![
+            entry("431960001", "Old scene", WallpaperType::Scene, "scene.pkg", false, 10),
+            entry("local-image-new", "Vacation", WallpaperType::Video, "source.png", true, 30),
+            entry("431960002", "Middle video", WallpaperType::Video, "clip.mp4", false, 20),
+        ];
+
+        assert_eq!(
+            filtered_entry_indices(&entries, "", None, false, LibrarySortMode::Recent),
+            vec![1, 2, 0]
+        );
+        assert_eq!(
+            filtered_entry_indices(&entries, "", None, true, LibrarySortMode::Recent),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn search_matches_title_id_and_source_filename() {
+        let entries = vec![
+            entry("431960001", "Aurora", WallpaperType::Scene, "scene.pkg", false, 10),
+            entry(
+                "local-image-deadbeef",
+                "Road trip",
+                WallpaperType::Video,
+                "source.png",
+                true,
+                30,
+            ),
+            entry("431960002", "Ocean", WallpaperType::Video, "sunset-loop.mp4", false, 20),
+        ];
+
+        assert_eq!(
+            filtered_entry_indices(&entries, "aurora", None, false, LibrarySortMode::Name),
+            vec![0]
+        );
+        assert_eq!(
+            filtered_entry_indices(&entries, "deadbeef", None, false, LibrarySortMode::Name),
+            vec![1]
+        );
+        assert_eq!(
+            filtered_entry_indices(&entries, "sunset-loop", None, false, LibrarySortMode::Name),
+            vec![2]
+        );
+    }
 
     #[test]
     fn large_library_builds_only_a_bounded_visible_window() {
