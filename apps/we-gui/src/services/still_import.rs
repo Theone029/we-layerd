@@ -14,6 +14,8 @@ use we_core::wallpaper::settings::Rotation;
 
 use crate::domain::still_editor::StillEditorState;
 
+use super::media_backend::{self, MotionProbe};
+
 const STILL_MAX_INPUT_BYTES: u64 = 128 * 1024 * 1024;
 const STILL_MAX_SOURCE_DIMENSION: u32 = 8_192;
 const STILL_DECODER_MAX_ALLOC: u64 = 384 * 1024 * 1024;
@@ -66,10 +68,32 @@ pub(crate) async fn import(
 }
 
 fn inspect_sync(path: &Path) -> Result<StillImageDraft, String> {
-    let (decoded, _) = decode_still(path)?;
-    let (width, height) = decoded.dimensions();
+    match decode_still(path) {
+        Ok((decoded, _)) => {
+            let dimensions = decoded.dimensions();
+            build_editor_draft(path, dimensions, decoded)
+        }
+        Err(still_error) => {
+            let probe = media_backend::probe_motion(path).map_err(|media_error| {
+                format!(
+                    "selected media is neither a supported still nor supported motion media:                      {still_error}; {media_error}"
+                )
+            })?;
+            let preview_png = media_backend::extract_preview_png(path)?;
+            let preview = image_rs::load_from_memory_with_format(&preview_png, ImageFormat::Png)
+                .map_err(|error| format!("cannot decode bounded FFmpeg preview: {error}"))?;
 
-    let preview = decoded.thumbnail(STILL_PREVIEW_MAX_WIDTH, STILL_PREVIEW_MAX_HEIGHT);
+            build_editor_draft(path, (probe.width, probe.height), preview)
+        }
+    }
+}
+
+fn build_editor_draft(
+    path: &Path,
+    source_dimensions: (u32, u32),
+    preview_source: DynamicImage,
+) -> Result<StillImageDraft, String> {
+    let preview = preview_source.thumbnail(STILL_PREVIEW_MAX_WIDTH, STILL_PREVIEW_MAX_HEIGHT);
     let rgba = preview.to_rgba8();
     let preview_width = rgba.width();
     let preview_height = rgba.height();
@@ -87,8 +111,8 @@ fn inspect_sync(path: &Path) -> Result<StillImageDraft, String> {
             .take(240)
             .collect(),
         title: normalized_title("", path),
-        width,
-        height,
+        width: source_dimensions.0,
+        height: source_dimensions.1,
         preview_width,
         preview_height,
         preview_rgba,
@@ -221,7 +245,30 @@ fn import_sync(
     original_name: &str,
     requested_title: &str,
 ) -> Result<StillImportResult, String> {
-    let (decoded, source_format) = decode_still(source_path)?;
+    match decode_still(source_path) {
+        Ok((decoded, source_format)) => import_still_sync(
+            workshop_root,
+            source_path,
+            original_name,
+            requested_title,
+            decoded,
+            source_format,
+        ),
+        Err(_) => {
+            let probe = media_backend::probe_motion(source_path)?;
+            import_motion_sync(workshop_root, source_path, original_name, requested_title, &probe)
+        }
+    }
+}
+
+fn import_still_sync(
+    workshop_root: &Path,
+    source_path: &Path,
+    original_name: &str,
+    requested_title: &str,
+    decoded: DynamicImage,
+    source_format: ImageFormat,
+) -> Result<StillImportResult, String> {
     let (width, height) = decoded.dimensions();
 
     let rendered_png = encode_png(&decoded)?;
@@ -241,11 +288,23 @@ fn import_sync(
     })?;
     private_dir_permissions(workshop_root)?;
 
-    let (id, destination) =
-        choose_destination(workshop_root, &base_id, source_path, &original_file_name)?;
+    let (id, destination) = choose_destination(
+        workshop_root,
+        &base_id,
+        source_path,
+        &original_file_name,
+        RENDERED_FILE_NAME,
+    )?;
 
     if destination.exists() {
-        return existing_result(id, destination, width, height, &original_file_name);
+        return existing_result(
+            id,
+            destination,
+            width,
+            height,
+            &original_file_name,
+            RENDERED_FILE_NAME,
+        );
     }
 
     let temp = workshop_root.join(format!(".{id}.tmp-{}", std::process::id()));
@@ -305,6 +364,123 @@ fn import_sync(
         id,
         original_path: destination.join(&original_file_name),
         source_path: destination.join(RENDERED_FILE_NAME),
+        preview_path: destination.join(PREVIEW_FILE_NAME),
+        directory: destination,
+        width,
+        height,
+        created: true,
+    })
+}
+
+fn import_motion_sync(
+    workshop_root: &Path,
+    source_path: &Path,
+    original_name: &str,
+    requested_title: &str,
+    probe: &MotionProbe,
+) -> Result<StillImportResult, String> {
+    let width = probe.width;
+    let height = probe.height;
+    let original_file_name = format!("original.{}", probe.kind.original_extension());
+    let rendered_file_name = format!("rendered.{}", probe.kind.rendered_extension());
+    let original_name = normalized_original_name(original_name, probe.kind.original_extension());
+    let title = normalized_title(requested_title, Path::new(&original_name));
+
+    let preview_png = media_backend::extract_preview_png(source_path)?;
+    let exact_hash = fnv1a64_file(source_path)?;
+    let base_id = format!("local-media-{exact_hash:016x}");
+
+    fs::create_dir_all(workshop_root).map_err(|error| {
+        format!("failed to create wallpaper library {}: {error}", workshop_root.display())
+    })?;
+    private_dir_permissions(workshop_root)?;
+
+    let (id, destination) = choose_destination(
+        workshop_root,
+        &base_id,
+        source_path,
+        &original_file_name,
+        &rendered_file_name,
+    )?;
+
+    if destination.exists() {
+        return existing_result(
+            id,
+            destination,
+            width,
+            height,
+            &original_file_name,
+            &rendered_file_name,
+        );
+    }
+
+    let temp = workshop_root.join(format!(".{id}.tmp-{}", std::process::id()));
+
+    if temp.exists() {
+        fs::remove_dir_all(&temp).map_err(|error| {
+            format!("failed to clear stale import staging {}: {error}", temp.display())
+        })?;
+    }
+
+    fs::create_dir(&temp)
+        .map_err(|error| format!("failed to create import staging {}: {error}", temp.display()))?;
+    private_dir_permissions(&temp)?;
+
+    let original_out = temp.join(&original_file_name);
+    let rendered_out = temp.join(&rendered_file_name);
+    let preview_out = temp.join(PREVIEW_FILE_NAME);
+    let project_out = temp.join(PROJECT_FILE_NAME);
+
+    let install_result = (|| -> Result<(), String> {
+        copy_private_file(source_path, &original_out)?;
+
+        if probe.kind.needs_transcode() {
+            media_backend::transcode_gif_to_webm(&original_out, &rendered_out)?;
+            private_file_permissions(&rendered_out)?;
+        } else {
+            copy_private_file(&original_out, &rendered_out)?;
+        }
+
+        write_private_file(&preview_out, &preview_png)?;
+
+        let mut project_json = serde_json::to_vec_pretty(&json!({
+            "title": title,
+            "type": "video",
+            "file": rendered_file_name,
+            "we_layerd": {
+                "kind": probe.kind.metadata_kind(),
+                "version": 3,
+                "original_name": original_name,
+                "original_file": original_file_name,
+                "rendered_file": rendered_file_name,
+                "source_format": probe.kind.format_name(),
+                "source_codec": probe.codec_name,
+                "media_backend": "ffmpeg"
+            }
+        }))
+        .map_err(|error| format!("failed to serialize imported media metadata: {error}"))?;
+        project_json.push(b'\n');
+
+        write_private_file(&project_out, &project_json)?;
+
+        fs::rename(&temp, &destination).map_err(|error| {
+            format!("failed to publish imported wallpaper {}: {error}", destination.display())
+        })?;
+
+        Ok(())
+    })();
+
+    if let Err(error) = install_result {
+        let _ = fs::remove_dir_all(&temp);
+        return Err(error);
+    }
+
+    sync_directory(workshop_root)?;
+
+    Ok(StillImportResult {
+        id,
+        original_path: destination.join(&original_file_name),
+        source_path: destination.join(&rendered_file_name),
         preview_path: destination.join(PREVIEW_FILE_NAME),
         directory: destination,
         width,
@@ -420,6 +596,7 @@ fn choose_destination(
     base_id: &str,
     source_path: &Path,
     original_file_name: &str,
+    rendered_file_name: &str,
 ) -> Result<(String, PathBuf), String> {
     for suffix in 0..10_000_u32 {
         let id = if suffix == 0 { base_id.to_string() } else { format!("{base_id}-{suffix}") };
@@ -434,7 +611,7 @@ fn choose_destination(
         if existing_original.is_file() && files_equal(source_path, &existing_original)? {
             if !destination.join(PROJECT_FILE_NAME).is_file()
                 || !destination.join(PREVIEW_FILE_NAME).is_file()
-                || !destination.join(RENDERED_FILE_NAME).is_file()
+                || !destination.join(rendered_file_name).is_file()
             {
                 return Err(format!("existing import {} is incomplete", destination.display()));
             }
@@ -452,9 +629,10 @@ fn existing_result(
     width: u32,
     height: u32,
     original_file_name: &str,
+    rendered_file_name: &str,
 ) -> Result<StillImportResult, String> {
     let original_path = directory.join(original_file_name);
-    let source_path = directory.join(RENDERED_FILE_NAME);
+    let source_path = directory.join(rendered_file_name);
     let preview_path = directory.join(PREVIEW_FILE_NAME);
 
     if !original_path.is_file()
@@ -803,23 +981,6 @@ mod tests {
         let draft = inspect_sync(&source).expect("WebP content probe");
 
         assert_eq!((draft.width, draft.height), (64, 48));
-
-        fs::remove_dir_all(root).expect("remove fixture");
-    }
-
-    #[test]
-    fn unsupported_animated_media_fails_before_project_residue() {
-        let root = temp_root("gif");
-        let library = root.join("library");
-        let source = root.join("animated.gif");
-
-        fs::write(&source, b"GIF89a\x01\x00\x01\x00\x00\x00\x00").expect("write GIF signature");
-
-        let error =
-            import_sync(&library, &source, "animated.gif", "Animated").expect_err("GIF remains M3");
-
-        assert!(error.contains("PNG, JPEG, or WebP"), "unexpected error: {error}");
-        assert!(!library.exists());
 
         fs::remove_dir_all(root).expect("remove fixture");
     }

@@ -5737,6 +5737,7 @@ dependencies = [
  "image",
  "resvg 0.42.0",
  "rfd",
+ "serde",
  "serde_json",
  "toml",
  "tray-icon",
