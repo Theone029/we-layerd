@@ -4,4 +4,5 @@ pub mod library_scan;
 pub mod playlist_editor;
 pub mod runtime_status;
 pub mod settings;
+pub mod still_editor;
 pub mod ui_state;

@@ -87,6 +87,12 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
         .spacing(2)
         .width(Fill),
         container(
+            button(text(format!("+  {}", language.text(Text::AddCustomWallpaper))).size(16))
+                .on_press(Message::AddWallpaperPressed)
+                .style(top_bar_button_style),
+        )
+        .id("library.add-wallpaper"),
+        container(
             button(text(format!("↻  {}", language.text(Text::RefreshLibrary))).size(16))
                 .on_press(Message::RefreshLibrary)
                 .style(top_bar_button_style),

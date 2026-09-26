@@ -41,6 +41,13 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             queue_library_scan(app, app.ui_settings.workshop_path.clone())
         }
         Message::ScanCompleted(generation, result) => finish_library_scan(app, generation, result),
+        Message::AddWallpaperPressed => {
+            app.still_editor = crate::domain::still_editor::StillEditorState::default();
+            app.sidebar = Some(Sidebar::StillEditor);
+            app.show_settings = false;
+            Task::none()
+        }
+        Message::StillEditor(message) => super::still_editor_update::update(app, message),
         Message::SelectWallpaper(index) => {
             if !select_wallpaper(app, index, true) {
                 return Task::none();

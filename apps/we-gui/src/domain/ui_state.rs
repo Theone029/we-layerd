@@ -11,6 +11,7 @@ pub(crate) enum Pane {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Sidebar {
     Detail,
+    StillEditor,
     Settings,
     Playlist,
     Profile,

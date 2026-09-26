@@ -9,7 +9,7 @@ use crate::{
         i18n::Text,
         ui_state::{Pane, Sidebar},
     },
-    ui::sidebar::{detail, playlist, profile, settings},
+    ui::sidebar::{detail, playlist, profile, settings, still_editor},
 };
 
 use super::{App, Message};
@@ -67,6 +67,9 @@ fn sidebar_view(app: &App, sidebar: Sidebar) -> Element<'_, Message> {
             app.autostart_pending,
             app.autostart_error.as_deref(),
         ),
+        Sidebar::StillEditor => {
+            still_editor::view(&app.still_editor, app.language).map(Message::StillEditor)
+        }
         Sidebar::Playlist => playlist::view(app),
         Sidebar::Profile => profile::view(app),
         Sidebar::Detail => match app

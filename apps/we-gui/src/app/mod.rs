@@ -3,6 +3,7 @@ mod init;
 mod settings;
 mod signal;
 mod state;
+mod still_editor_update;
 mod subscription;
 mod update;
 mod view;
@@ -126,6 +127,8 @@ mod tests {
             show_settings: true,
             sidebar: None,
             detail_tab: DetailTab::Actions,
+
+            still_editor: crate::domain::still_editor::StillEditorState::default(),
             playback_paused: false,
             playback_running: false,
             search_query: String::new(),
@@ -233,6 +236,8 @@ mod tests {
             show_settings: false,
             sidebar: None,
             detail_tab: DetailTab::Actions,
+
+            still_editor: crate::domain::still_editor::StillEditorState::default(),
             playback_paused: false,
             playback_running: true,
             search_query: String::new(),

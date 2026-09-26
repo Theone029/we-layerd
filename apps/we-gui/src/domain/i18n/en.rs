@@ -121,6 +121,13 @@ pub(super) fn text(key: Text) -> &'static str {
         Text::HorizontalPosition => "Horizontal position",
         Text::VerticalPosition => "Vertical position",
         Text::ResetTransform => "Reset transform",
+        Text::AddCustomWallpaper => "Add wallpaper",
+        Text::CustomImageEditor => "Custom image editor",
+        Text::NoCustomImageSelected => "No image selected",
+        Text::SecureImageIngressPending => {
+            "File selection will be enabled by the secure desktop ingress bridge."
+        }
+        Text::TargetResolution => "Target resolution",
         Text::FinalOutputMsaa => "Final-output MSAA",
         Text::Msaa1x => "1x (off)",
         Text::Msaa2x => "2x",

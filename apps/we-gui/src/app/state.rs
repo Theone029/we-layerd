@@ -18,11 +18,12 @@ use crate::{
         playlist_editor::{LegacyShuffleMigration, MoveDirection},
         runtime_status::RuntimeStatus,
         settings::{ScaleModeOption, UiSettings},
+        still_editor::StillEditorState,
         ui_state::{AnimatedPreview, GifFrame, Pane, Sidebar},
     },
     platform::tray,
     services::runtime::DaemonStatus,
-    ui::sidebar::detail::DetailMessage,
+    ui::sidebar::{detail::DetailMessage, still_editor::StillEditorMessage},
 };
 
 pub(crate) struct App {
@@ -40,6 +41,7 @@ pub(crate) struct App {
     pub show_settings: bool,
     pub sidebar: Option<Sidebar>,
     pub detail_tab: crate::ui::sidebar::detail::DetailTab,
+    pub still_editor: StillEditorState,
     pub playback_paused: bool,
     pub playback_running: bool,
     pub search_query: String,
@@ -162,6 +164,8 @@ pub(crate) enum Message {
     PlayPressed,
     StopPressed,
     SettingsPressed,
+    AddWallpaperPressed,
+    StillEditor(StillEditorMessage),
     SearchChanged(String),
     TypeFilterSelected(Option<WallpaperType>),
     PaneResized(pane_grid::ResizeEvent),

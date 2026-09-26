@@ -102,6 +102,8 @@ pub(crate) fn initialize() -> (App, Task<Message>) {
             show_settings: false,
             sidebar: None,
             detail_tab: DetailTab::Actions,
+
+            still_editor: crate::domain::still_editor::StillEditorState::default(),
             playback_paused: false,
             playback_running: false,
             search_query: String::new(),
