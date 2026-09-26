@@ -52,6 +52,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.still_editor = crate::domain::still_editor::StillEditorState::default();
             app.still_editor_error = None;
             app.still_editor_busy = false;
+            app.still_import_pending_id = None;
             app.sidebar = Some(Sidebar::StillEditor);
             app.show_settings = false;
             Task::none()
@@ -93,7 +94,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.still_editor_busy = false;
 
             match result {
-                Ok(draft) => {
+                Ok(mut draft) => {
                     let title = Path::new(&display_name)
                         .file_stem()
                         .and_then(|value| value.to_str())
@@ -105,8 +106,18 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 
                     app.still_editor.source_dimensions = Some((draft.width, draft.height));
 
-                    app.still_editor_error = None;
-                    app.still_editor_draft = Some(draft);
+                    match still_import::refresh_editor_preview(&mut draft, &app.still_editor) {
+                        Ok(()) => {
+                            app.still_editor_error = None;
+                            app.still_editor_draft = Some(draft);
+                        }
+                        Err(error) => {
+                            still_ingress::discard_staged(&staged_path);
+                            app.still_editor.source_dimensions = None;
+                            app.still_editor_draft = None;
+                            app.still_editor_error = Some(error);
+                        }
+                    }
                 }
 
                 Err(error) => {
@@ -120,6 +131,34 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 
             Task::none()
         }
+        Message::StillImportCompleted { staged_path, editor, result } => {
+            app.still_editor_busy = false;
+
+            // The private ingress staging object is terminal here on both
+            // successful publication and import failure.
+            still_ingress::discard_staged(&staged_path);
+            app.still_editor_draft = None;
+            app.still_editor.source_dimensions = None;
+
+            match result {
+                Ok(imported_id) => {
+                    let settings =
+                        super::still_editor_update::wallpaper_settings_from_editor(&editor);
+                    app.launch_settings.wallpapers.insert(imported_id.clone(), settings);
+                    app.still_import_pending_id = Some(imported_id);
+                    app.still_editor_error = None;
+                    app.sidebar = None;
+
+                    let workshop_path = app.ui_settings.workshop_path.clone();
+                    queue_library_scan(app, workshop_path)
+                }
+                Err(error) => {
+                    app.still_editor_error = Some(error);
+                    Task::none()
+                }
+            }
+        }
+
         Message::SelectWallpaper(index) => {
             if !select_wallpaper(app, index, true) {
                 return Task::none();
@@ -936,6 +975,14 @@ fn finish_library_scan(
             app.gif_preview_failed.clear();
             app.library_scroll_y = 0.0;
             refresh_filtered_entries(app);
+
+            if let Some(imported_id) = app.still_import_pending_id.clone() {
+                if let Some(index) = app.entries.iter().position(|entry| entry.id == imported_id) {
+                    app.still_import_pending_id = None;
+                    let _ = select_wallpaper(app, index, true);
+                }
+            }
+
             tasks.push(refresh_visible_gif_previews(app));
             tasks.push(migrate_legacy_shuffle_if_needed(app));
             tasks.push(iced::widget::operation::scroll_to(

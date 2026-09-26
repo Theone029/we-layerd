@@ -5,8 +5,14 @@ use std::{
 };
 
 use iced::widget::image;
-use image_rs::{DynamicImage, GenericImageView, ImageFormat, ImageReader, Limits};
+use image_rs::{
+    imageops::{self, FilterType},
+    DynamicImage, GenericImageView, ImageFormat, ImageReader, Limits, Rgba, RgbaImage,
+};
 use serde_json::json;
+use we_core::wallpaper::settings::Rotation;
+
+use crate::domain::still_editor::StillEditorState;
 
 const STILL_MAX_INPUT_BYTES: u64 = 128 * 1024 * 1024;
 const STILL_MAX_SOURCE_DIMENSION: u32 = 8_192;
@@ -14,6 +20,8 @@ const STILL_DECODER_MAX_ALLOC: u64 = 384 * 1024 * 1024;
 
 const STILL_PREVIEW_MAX_WIDTH: u32 = 480;
 const STILL_PREVIEW_MAX_HEIGHT: u32 = 270;
+const STILL_EDITOR_CANVAS_MAX_WIDTH: u32 = 480;
+const STILL_EDITOR_CANVAS_MAX_HEIGHT: u32 = 270;
 
 const SOURCE_FILE_NAME: &str = "source.png";
 const PREVIEW_FILE_NAME: &str = "preview.png";
@@ -25,6 +33,9 @@ pub(crate) struct StillImageDraft {
     pub(crate) title: String,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    preview_width: u32,
+    preview_height: u32,
+    preview_rgba: Vec<u8>,
     pub(crate) preview: image::Handle,
 }
 
@@ -59,14 +70,139 @@ fn inspect_sync(path: &Path) -> Result<StillImageDraft, String> {
     let rgba = preview.to_rgba8();
     let preview_width = rgba.width();
     let preview_height = rgba.height();
+    let preview_rgba = rgba.into_raw();
+    let preview_handle =
+        image::Handle::from_rgba(preview_width, preview_height, preview_rgba.clone());
 
     Ok(StillImageDraft {
         source_path: path.to_path_buf(),
         title: normalized_title("", path),
         width,
         height,
-        preview: image::Handle::from_rgba(preview_width, preview_height, rgba.into_raw()),
+        preview_width,
+        preview_height,
+        preview_rgba,
+        preview: preview_handle,
     })
+}
+
+pub(crate) fn refresh_editor_preview(
+    draft: &mut StillImageDraft,
+    state: &StillEditorState,
+) -> Result<(), String> {
+    let (width, height, rgba) = compose_editor_preview(draft, state)?;
+    draft.preview = image::Handle::from_rgba(width, height, rgba);
+    Ok(())
+}
+
+fn compose_editor_preview(
+    draft: &StillImageDraft,
+    state: &StillEditorState,
+) -> Result<(u32, u32, Vec<u8>), String> {
+    let source =
+        RgbaImage::from_raw(draft.preview_width, draft.preview_height, draft.preview_rgba.clone())
+            .ok_or_else(|| "stored still-image preview pixels are invalid".to_string())?;
+
+    // The runtime maps Deg90/Deg180/Deg270 to the corresponding Wayland
+    // buffer transform. Because the compositor applies the inverse transform
+    // to unrotated buffer contents, the visible positive rotation is clockwise.
+    let rotated = match state.rotation {
+        Rotation::Deg0 => source,
+        Rotation::Deg90 => imageops::rotate90(&source),
+        Rotation::Deg180 => imageops::rotate180(&source),
+        Rotation::Deg270 => imageops::rotate270(&source),
+    };
+
+    let geometry = state.preview_geometry_for((draft.width, draft.height));
+    let (target_width, target_height) = state.target_extent();
+    let (canvas_width, canvas_height) = preview_canvas_extent(target_width, target_height);
+
+    let (crop_x, crop_width) = match geometry.viewport_source {
+        Some(source) => {
+            preview_crop_axis(source.x, source.width, geometry.render_width, rotated.width())
+        }
+        None => (0, rotated.width()),
+    };
+    let (crop_y, crop_height) = match geometry.viewport_source {
+        Some(source) => {
+            preview_crop_axis(source.y, source.height, geometry.render_height, rotated.height())
+        }
+        None => (0, rotated.height()),
+    };
+
+    let cropped = imageops::crop_imm(&rotated, crop_x, crop_y, crop_width, crop_height).to_image();
+
+    let destination_width =
+        preview_destination_extent(geometry.viewport_width, target_width, canvas_width);
+    let destination_height =
+        preview_destination_extent(geometry.viewport_height, target_height, canvas_height);
+
+    let composed =
+        imageops::resize(&cropped, destination_width, destination_height, FilterType::Triangle);
+
+    let mut canvas = RgbaImage::from_pixel(canvas_width, canvas_height, Rgba([0, 0, 0, 255]));
+    let destination_x =
+        normalized_destination_offset(canvas_width, destination_width, state.position_x);
+    let destination_y =
+        normalized_destination_offset(canvas_height, destination_height, state.position_y);
+
+    imageops::overlay(&mut canvas, &composed, i64::from(destination_x), i64::from(destination_y));
+
+    Ok((canvas_width, canvas_height, canvas.into_raw()))
+}
+
+fn preview_canvas_extent(target_width: u32, target_height: u32) -> (u32, u32) {
+    let target_width = target_width.max(1);
+    let target_height = target_height.max(1);
+    let scale = (STILL_EDITOR_CANVAS_MAX_WIDTH as f64 / target_width as f64)
+        .min(STILL_EDITOR_CANVAS_MAX_HEIGHT as f64 / target_height as f64);
+
+    let width = (target_width as f64 * scale)
+        .round()
+        .clamp(1.0, STILL_EDITOR_CANVAS_MAX_WIDTH as f64) as u32;
+    let height = (target_height as f64 * scale)
+        .round()
+        .clamp(1.0, STILL_EDITOR_CANVAS_MAX_HEIGHT as f64) as u32;
+
+    (width, height)
+}
+
+fn preview_crop_axis(
+    start: f64,
+    length: f64,
+    render_extent: u32,
+    preview_extent: u32,
+) -> (u32, u32) {
+    let render_extent = render_extent.max(1) as f64;
+    let preview_extent = preview_extent.max(1);
+    let preview_extent_f64 = preview_extent as f64;
+
+    let first = (start / render_extent * preview_extent_f64)
+        .floor()
+        .clamp(0.0, (preview_extent - 1) as f64) as u32;
+    let end = ((start + length) / render_extent * preview_extent_f64)
+        .ceil()
+        .clamp((first + 1) as f64, preview_extent_f64) as u32;
+
+    (first, end.saturating_sub(first).max(1))
+}
+
+fn preview_destination_extent(viewport_extent: u32, target_extent: u32, canvas_extent: u32) -> u32 {
+    (viewport_extent as f64 / target_extent.max(1) as f64 * canvas_extent as f64)
+        .round()
+        .clamp(1.0, canvas_extent.max(1) as f64) as u32
+}
+
+fn normalized_destination_offset(canvas: u32, destination: u32, position: f32) -> u32 {
+    let slack = canvas.saturating_sub(destination);
+    if slack == 0 {
+        return 0;
+    }
+
+    let position = if position.is_finite() { position.clamp(-1.0, 1.0) } else { 0.0 };
+    let fraction = (f64::from(position) + 1.0) / 2.0;
+
+    (slack as f64 * fraction).round().clamp(0.0, slack as f64) as u32
 }
 
 fn import_sync(
@@ -366,11 +502,17 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use image_rs::{DynamicImage, ImageFormat, Rgb, RgbImage};
-    use we_core::wallpaper::{scan_workshop_wallpapers, WallpaperType};
+    use image_rs::{DynamicImage, ImageFormat, Rgb, RgbImage, RgbaImage};
+    use we_core::{
+        config::ScaleMode,
+        wallpaper::{scan_workshop_wallpapers, WallpaperType},
+    };
+
+    use crate::domain::still_editor::StillEditorState;
 
     use super::{
-        import_sync, inspect_sync, PREVIEW_FILE_NAME, PROJECT_FILE_NAME, SOURCE_FILE_NAME,
+        compose_editor_preview, import_sync, inspect_sync, PREVIEW_FILE_NAME, PROJECT_FILE_NAME,
+        SOURCE_FILE_NAME,
     };
 
     fn temp_root(label: &str) -> PathBuf {
@@ -409,6 +551,31 @@ mod tests {
         assert_eq!(draft.source_path, source);
         assert_eq!(draft.title, "My Wallpaper");
         assert_eq!((draft.width, draft.height), (64, 48));
+
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    #[test]
+    fn editor_preview_applies_shared_destination_geometry() {
+        let root = temp_root("editor-preview");
+        let source = root.join("source.png");
+        fixture_image(&source, ImageFormat::Png);
+        let draft = inspect_sync(&source).expect("inspect PNG");
+
+        let mut state = StillEditorState::default();
+        state.target_width = "400".to_string();
+        state.target_height = "400".to_string();
+        state.scale_mode = ScaleMode::Fit;
+        state.zoom = 0.5;
+        state.position_x = 1.0;
+
+        let (width, height, rgba) =
+            compose_editor_preview(&draft, &state).expect("compose editor preview");
+        assert_eq!((width, height), (270, 270));
+
+        let image = RgbaImage::from_raw(width, height, rgba).expect("preview pixels");
+        assert_eq!(image.get_pixel(0, height / 2).0, [0, 0, 0, 255]);
+        assert_ne!(image.get_pixel(width - 1, height / 2).0, [0, 0, 0, 255]);
 
         fs::remove_dir_all(root).expect("remove fixture");
     }

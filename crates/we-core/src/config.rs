@@ -402,6 +402,14 @@ pub fn build_config_for_wallpaper(
     config.renderer.volume = wallpaper.volume;
     config.renderer.muted = wallpaper.muted;
     config.renderer.msaa_samples = wallpaper.msaa_samples.max(1);
+    config.general.scale_mode = match &wallpaper.fill_mode {
+        WallpaperFillMode::Cover => ScaleMode::Cover,
+        WallpaperFillMode::Fit => ScaleMode::Fit,
+        WallpaperFillMode::Stretch => ScaleMode::Stretch,
+        // Center has no equivalent in the outer Wayland presentation model.
+        // Preserve the existing global mode instead of inventing semantics.
+        WallpaperFillMode::Center => config.general.scale_mode.clone(),
+    };
     config.renderer.fill_mode = wallpaper.fill_mode;
     config.renderer.rotation_degrees = wallpaper.rotation_degrees.degrees();
     config.renderer.zoom = wallpaper.zoom;
@@ -864,6 +872,7 @@ mod tests {
         assert_eq!(cfg.renderer.render_width, Some(2560));
         assert_eq!(cfg.renderer.render_height, Some(1440));
         assert_eq!(cfg.renderer.fill_mode, WallpaperFillMode::Fit);
+        assert_eq!(cfg.general.scale_mode, ScaleMode::Fit);
         assert_eq!(cfg.renderer.rotation_degrees, 90);
         assert_eq!(cfg.renderer.zoom, 1.75);
         assert_eq!(cfg.renderer.position_x, -0.25);

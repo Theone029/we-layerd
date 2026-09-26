@@ -107,6 +107,7 @@ pub(crate) fn initialize() -> (App, Task<Message>) {
             still_editor_draft: None,
             still_editor_error: None,
             still_editor_busy: false,
+            still_import_pending_id: None,
             playback_paused: false,
             playback_running: false,
             search_query: String::new(),

@@ -364,6 +364,18 @@ pub(crate) fn apply_selection_to_config(
     if let Some(profile) = wallpaper_profile {
         config.renderer.msaa_samples = profile.msaa_samples.max(1);
     }
+    config.general.scale_mode = match &wallpaper.fill_mode {
+        we_core::wallpaper::settings::WallpaperFillMode::Cover => we_core::config::ScaleMode::Cover,
+        we_core::wallpaper::settings::WallpaperFillMode::Fit => we_core::config::ScaleMode::Fit,
+        we_core::wallpaper::settings::WallpaperFillMode::Stretch => {
+            we_core::config::ScaleMode::Stretch
+        }
+        // Center has no equivalent in the outer Wayland presentation model.
+        // Preserve the existing global mode instead of inventing semantics.
+        we_core::wallpaper::settings::WallpaperFillMode::Center => {
+            config.general.scale_mode.clone()
+        }
+    };
     config.renderer.fill_mode = wallpaper.fill_mode;
     config.renderer.rotation_degrees = wallpaper.rotation_degrees.degrees();
     config.renderer.zoom = wallpaper.zoom;
@@ -501,6 +513,7 @@ mod tests {
         runtime_config.wallpapers.insert(
             "scene".to_string(),
             we_core::wallpaper::settings::WallpaperSettings {
+                fill_mode: we_core::wallpaper::settings::WallpaperFillMode::Fit,
                 zoom: 2.0,
                 position_x: -0.5,
                 position_y: 0.25,
@@ -516,6 +529,7 @@ mod tests {
         super::apply_selection_to_config(&mut runtime_config, &selection)
             .expect("apply playlist selection");
 
+        assert_eq!(runtime_config.general.scale_mode, we_core::config::ScaleMode::Fit);
         assert_eq!(runtime_config.renderer.zoom, 2.0);
         assert_eq!(runtime_config.renderer.position_x, -0.5);
         assert_eq!(runtime_config.renderer.position_y, 0.25);

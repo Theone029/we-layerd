@@ -16,6 +16,7 @@ use crate::domain::{
 pub(crate) enum StillEditorMessage {
     Close,
     ChooseImage,
+    Import,
     TitleChanged(String),
     TargetWidthChanged(String),
     TargetHeightChanged(String),
@@ -34,6 +35,7 @@ pub(crate) fn view<'a>(
     error: Option<&'a str>,
     language: Language,
 ) -> Element<'a, StillEditorMessage> {
+    let can_import = preview.is_some() && !busy && error.is_none();
     let preview = preview_panel(state, preview, language);
 
     let target = section(
@@ -87,21 +89,23 @@ pub(crate) fn view<'a>(
         language.text(Text::Transform),
         column![
             text(format!("{}  {:.0}%", language.text(Text::Zoom), state.zoom * 100.0)).size(13),
-            slider(0.1..=4.0, state.zoom, StillEditorMessage::ZoomChanged),
+            slider(0.1..=4.0, state.zoom, StillEditorMessage::ZoomChanged).step(0.01_f32),
             text(format!(
                 "{}  {:+.0}%",
                 language.text(Text::HorizontalPosition),
                 state.position_x * 100.0
             ))
             .size(13),
-            slider(-1.0..=1.0, state.position_x, StillEditorMessage::PositionXChanged),
+            slider(-1.0..=1.0, state.position_x, StillEditorMessage::PositionXChanged)
+                .step(0.01_f32),
             text(format!(
                 "{}  {:+.0}%",
                 language.text(Text::VerticalPosition),
                 state.position_y * 100.0
             ))
             .size(13),
-            slider(-1.0..=1.0, state.position_y, StillEditorMessage::PositionYChanged),
+            slider(-1.0..=1.0, state.position_y, StillEditorMessage::PositionYChanged)
+                .step(0.01_f32),
             text(language.text(Text::Rotation)).size(13),
             pick_list(
                 vec![Rotation::Deg0, Rotation::Deg90, Rotation::Deg180, Rotation::Deg270,],
@@ -132,6 +136,10 @@ pub(crate) fn view<'a>(
     let choose_button =
         if busy { choose_button } else { choose_button.on_press(StillEditorMessage::ChooseImage) };
 
+    let import_button = button(text("Import wallpaper")).padding([10, 14]);
+    let import_button =
+        if can_import { import_button.on_press(StillEditorMessage::Import) } else { import_button };
+
     let source = section(
         language.text(Text::CustomImageEditor),
         column![
@@ -144,18 +152,20 @@ pub(crate) fn view<'a>(
                 .size(12)
                 .color(Color::from_rgb8(170, 174, 184)),
             choose_button,
+            import_button,
             text(error.unwrap_or("")).size(12).color(Color::from_rgb8(255, 180, 171)),
         ]
         .spacing(10),
     );
 
+    let close_button = button(text("×").size(20)).padding([6, 12]);
+    let close_button =
+        if busy { close_button } else { close_button.on_press(StillEditorMessage::Close) };
+
     container(
         column![
-            row![
-                text(language.text(Text::CustomImageEditor)).size(24).width(Fill),
-                button(text("×").size(20)).on_press(StillEditorMessage::Close).padding([6, 12]),
-            ]
-            .align_y(iced::Alignment::Center),
+            row![text(language.text(Text::CustomImageEditor)).size(24).width(Fill), close_button,]
+                .align_y(iced::Alignment::Center),
             scrollable(column![preview, source, target, transform,].spacing(16)).height(Fill),
         ]
         .spacing(16),
@@ -222,7 +232,7 @@ fn preview_panel<'a>(
 
     container(
         column![
-            text("Source preview").size(16),
+            text("Preview").size(16),
             visual,
             text(summary).size(12).color(Color::from_rgb8(190, 194, 202)),
         ]
