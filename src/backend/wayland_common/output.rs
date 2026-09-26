@@ -1,23 +1,8 @@
 use crate::config::ScaleMode;
+use we_core::presentation::compute_presentation_geometry;
+pub(crate) use we_core::presentation::{PresentationGeometry, ViewportSource};
 
 pub(crate) const FRACTIONAL_SCALE_DENOMINATOR: u32 = 120;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct ViewportSource {
-    pub(crate) x: f64,
-    pub(crate) y: f64,
-    pub(crate) width: f64,
-    pub(crate) height: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct PresentationGeometry {
-    pub(crate) render_width: u32,
-    pub(crate) render_height: u32,
-    pub(crate) viewport_width: u32,
-    pub(crate) viewport_height: u32,
-    pub(crate) viewport_source: Option<ViewportSource>,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GeometryInput {
@@ -51,7 +36,7 @@ pub(crate) fn compute_geometry(input: GeometryInput) -> PresentationGeometry {
         if input.logical_height > 0 { input.logical_height } else { input.fallback_height }.max(1);
 
     if let Some((render_width, render_height)) = input.render_size_override {
-        return geometry_with_render_extent(
+        return compute_presentation_geometry(
             input.scale_mode,
             render_width.max(1),
             render_height.max(1),
@@ -64,7 +49,7 @@ pub(crate) fn compute_geometry(input: GeometryInput) -> PresentationGeometry {
     }
 
     if input.output_mode_width > 0 && input.output_mode_height > 0 {
-        return geometry_with_render_extent(
+        return compute_presentation_geometry(
             input.scale_mode,
             input.output_mode_width,
             input.output_mode_height,
@@ -80,7 +65,7 @@ pub(crate) fn compute_geometry(input: GeometryInput) -> PresentationGeometry {
     let render_width = (viewport_width as f64 * scale).round().max(1.0) as u32;
     let render_height = (viewport_height as f64 * scale).round().max(1.0) as u32;
 
-    geometry_with_render_extent(
+    compute_presentation_geometry(
         input.scale_mode,
         render_width,
         render_height,
@@ -90,178 +75,6 @@ pub(crate) fn compute_geometry(input: GeometryInput) -> PresentationGeometry {
         input.position_x,
         input.position_y,
     )
-}
-
-fn geometry_with_render_extent(
-    scale_mode: ScaleMode,
-    render_width: u32,
-    render_height: u32,
-    viewport_width: u32,
-    viewport_height: u32,
-    zoom: f64,
-    position_x: f64,
-    position_y: f64,
-) -> PresentationGeometry {
-    let mut geometry = match scale_mode {
-        ScaleMode::Stretch => PresentationGeometry {
-            render_width,
-            render_height,
-            viewport_width,
-            viewport_height,
-            viewport_source: None,
-        },
-        ScaleMode::Cover => {
-            let source = cover_source(render_width, render_height, viewport_width, viewport_height);
-            PresentationGeometry {
-                render_width,
-                render_height,
-                viewport_width,
-                viewport_height,
-                viewport_source: source,
-            }
-        }
-        ScaleMode::Fit => {
-            // A single layer-surface + wp_viewporter destination cannot center letterboxing.
-            // We still preserve aspect ratio here so fit is observable in status and rendering,
-            // with the current limitation that any empty area stays on the bottom/right edges.
-            let (fit_width, fit_height) =
-                fit_destination(render_width, render_height, viewport_width, viewport_height);
-            PresentationGeometry {
-                render_width,
-                render_height,
-                viewport_width: fit_width,
-                viewport_height: fit_height,
-                viewport_source: None,
-            }
-        }
-    };
-
-    apply_transform_source(&mut geometry, zoom, position_x, position_y);
-    geometry
-}
-
-fn finite_clamp(value: f64, default: f64, min: f64, max: f64) -> f64 {
-    if value.is_finite() {
-        value.clamp(min, max)
-    } else {
-        default
-    }
-}
-
-fn apply_transform_source(
-    geometry: &mut PresentationGeometry,
-    zoom: f64,
-    position_x: f64,
-    position_y: f64,
-) {
-    let zoom = finite_clamp(zoom, 1.0, 0.1, 4.0);
-    let position_x = finite_clamp(position_x, 0.0, -1.0, 1.0);
-    let position_y = finite_clamp(position_y, 0.0, -1.0, 1.0);
-
-    // Zooming below 100% scales the final presentation rectangle down.
-    // The layer-shell surface is positioned separately, so the desktop
-    // remains visible around it.
-    if zoom < 1.0 {
-        geometry.viewport_width = (geometry.viewport_width as f64 * zoom).round().max(1.0) as u32;
-        geometry.viewport_height = (geometry.viewport_height as f64 * zoom).round().max(1.0) as u32;
-        return;
-    }
-
-    // Neutral transforms preserve the base Cover/Fit/Stretch geometry.
-    if (zoom - 1.0).abs() < f64::EPSILON
-        && position_x.abs() < f64::EPSILON
-        && position_y.abs() < f64::EPSILON
-    {
-        return;
-    }
-
-    // At 100%+ use the existing zero-copy source-window transform.
-    // Cover's base crop remains the starting rectangle.
-    let render_width = geometry.render_width.max(1) as f64;
-    let render_height = geometry.render_height.max(1) as f64;
-
-    let base = geometry.viewport_source.unwrap_or(ViewportSource {
-        x: 0.0,
-        y: 0.0,
-        width: render_width,
-        height: render_height,
-    });
-
-    let width = (base.width / zoom).clamp(1.0, render_width);
-    let height = (base.height / zoom).clamp(1.0, render_height);
-
-    let centered_x =
-        (base.x + (base.width - width) / 2.0).clamp(0.0, (render_width - width).max(0.0));
-    let centered_y =
-        (base.y + (base.height - height) / 2.0).clamp(0.0, (render_height - height).max(0.0));
-
-    let max_x = (render_width - width).max(0.0);
-    let max_y = (render_height - height).max(0.0);
-
-    let x = if position_x < 0.0 {
-        centered_x + position_x * centered_x
-    } else {
-        centered_x + position_x * (max_x - centered_x)
-    };
-
-    let y = if position_y < 0.0 {
-        centered_y + position_y * centered_y
-    } else {
-        centered_y + position_y * (max_y - centered_y)
-    };
-
-    geometry.viewport_source =
-        Some(ViewportSource { x: x.clamp(0.0, max_x), y: y.clamp(0.0, max_y), width, height });
-}
-
-fn cover_source(
-    render_width: u32,
-    render_height: u32,
-    viewport_width: u32,
-    viewport_height: u32,
-) -> Option<ViewportSource> {
-    if render_width == 0 || render_height == 0 || viewport_width == 0 || viewport_height == 0 {
-        return None;
-    }
-
-    let render_aspect = render_width as f64 / render_height as f64;
-    let viewport_aspect = viewport_width as f64 / viewport_height as f64;
-    if (render_aspect - viewport_aspect).abs() < f64::EPSILON {
-        return None;
-    }
-
-    if render_aspect > viewport_aspect {
-        let cropped_width = render_height as f64 * viewport_aspect;
-        let x = ((render_width as f64 - cropped_width) / 2.0).max(0.0);
-        return Some(ViewportSource {
-            x,
-            y: 0.0,
-            width: cropped_width,
-            height: render_height as f64,
-        });
-    }
-
-    let cropped_height = render_width as f64 / viewport_aspect;
-    let y = ((render_height as f64 - cropped_height) / 2.0).max(0.0);
-    Some(ViewportSource { x: 0.0, y, width: render_width as f64, height: cropped_height })
-}
-
-fn fit_destination(
-    render_width: u32,
-    render_height: u32,
-    viewport_width: u32,
-    viewport_height: u32,
-) -> (u32, u32) {
-    if render_width == 0 || render_height == 0 || viewport_width == 0 || viewport_height == 0 {
-        return (viewport_width, viewport_height);
-    }
-
-    let width_scale = viewport_width as f64 / render_width as f64;
-    let height_scale = viewport_height as f64 / render_height as f64;
-    let scale = width_scale.min(height_scale);
-    let width = (render_width as f64 * scale).round().max(1.0) as u32;
-    let height = (render_height as f64 * scale).round().max(1.0) as u32;
-    (width, height)
 }
 
 fn transformed_frame_extent(width: u32, height: u32, rotation_degrees: u32) -> (u32, u32) {
@@ -358,7 +171,7 @@ impl OutputState {
             frame_height.max(1),
             self.rotation_degrees,
         );
-        geometry_with_render_extent(
+        compute_presentation_geometry(
             self.scale_mode,
             frame_width,
             frame_height,

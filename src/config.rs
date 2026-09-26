@@ -57,14 +57,7 @@ pub struct GnomeConfig {
     pub extension_dbus_name: String,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ScaleMode {
-    Fit,
-    #[default]
-    Cover,
-    Stretch,
-}
+pub use we_core::config::ScaleMode;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
