@@ -603,6 +603,16 @@ pub(super) fn begin_stop_teardown(state: &mut LayerShellState) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
+pub(super) fn commit_presentation_state(state: &LayerShellState) -> Result<()> {
+    let Some(surface) = state.objects.surface.as_ref() else {
+        anyhow::bail!("cannot commit presentation state without a Wayland surface");
+    };
+
+    surface.set_buffer_transform(wayland_buffer_transform(state.output.rotation_degrees)?);
+    surface.commit();
+    Ok(())
+}
+
 pub(super) fn init_wayland(
     _conn: &Connection,
     qh: &QueueHandle<LayerShellState>,

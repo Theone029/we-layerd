@@ -82,6 +82,85 @@ fn renderer_fill_mode(value: we_core::wallpaper::settings::WallpaperFillMode) ->
     }
 }
 
+fn normalize_presentation_compare(config: &mut crate::config::Config) {
+    // Mirror the output worker's effective-config boundary so unrelated
+    // daemon/global state cannot turn a presentation edit into a renderer
+    // teardown.
+    config.outputs.clear();
+    config.profiles = Default::default();
+    config.gnome = Default::default();
+    config.hooks = Default::default();
+    config.integrations = Default::default();
+    config.rules = Default::default();
+
+    // Direct wallpaper workers already have the selected wallpaper's
+    // effective renderer settings materialized into config.renderer.
+    if config.playlists.active.is_none() {
+        config.playlists = Default::default();
+        config.wallpapers.clear();
+    } else {
+        for wallpaper in config.wallpapers.values_mut() {
+            wallpaper.zoom = 1.0;
+            wallpaper.position_x = 0.0;
+            wallpaper.position_y = 0.0;
+            wallpaper.rotation_degrees = we_core::wallpaper::settings::Rotation::Deg0;
+        }
+    }
+
+    config.renderer.zoom = 1.0;
+    config.renderer.position_x = 0.0;
+    config.renderer.position_y = 0.0;
+    config.renderer.rotation_degrees = 0;
+}
+
+fn presentation_only_reconfigure(
+    current: &crate::config::Config,
+    desired: &crate::config::Config,
+) -> bool {
+    let mut current = current.clone();
+    let mut desired = desired.clone();
+
+    normalize_presentation_compare(&mut current);
+    normalize_presentation_compare(&mut desired);
+
+    match (toml::to_string(&current), toml::to_string(&desired)) {
+        (Ok(current), Ok(desired)) => current == desired,
+        _ => false,
+    }
+}
+
+fn apply_live_presentation(
+    state: &mut LayerShellState,
+    desired: &crate::config::Config,
+) -> Result<()> {
+    state.output.zoom = desired.renderer.zoom as f64;
+    state.output.position_x = desired.renderer.position_x as f64;
+    state.output.position_y = desired.renderer.position_y as f64;
+    state.output.rotation_degrees = desired.renderer.rotation_degrees;
+    state.output.recompute_geometry();
+
+    if state.frame_stats.last_frame_width > 0 && state.frame_stats.last_frame_height > 0 {
+        state.update_viewport_destination_for_frame(
+            state.frame_stats.last_frame_width,
+            state.frame_stats.last_frame_height,
+        );
+    } else {
+        state.update_viewport_destination();
+    }
+
+    surface::commit_presentation_state(state)?;
+
+    info!(
+        zoom = state.output.zoom,
+        position_x = state.output.position_x,
+        position_y = state.output.position_y,
+        rotation_degrees = state.output.rotation_degrees,
+        "applied live presentation update without renderer restart"
+    );
+
+    Ok(())
+}
+
 fn can_present_next_frame(state: &LayerShellState) -> bool {
     !state.pause_state.effective()
         && !state.stopping
@@ -577,6 +656,16 @@ pub(crate) fn run_output(ctx: BackendContext<'_>, target_output: &str) -> Result
                     return Ok(exit);
                 }
                 ControlCommand::Reconfigure => {
+                    let desired = ctx.desired_cfg.lock().ok().map(|config| config.clone());
+
+                    if let Some(desired) = desired {
+                        if presentation_only_reconfigure(cfg, &desired) {
+                            apply_live_presentation(&mut state, &desired)?;
+                            status_sink(state.snapshot());
+                            continue;
+                        }
+                    }
+
                     let exit = exit_runtime_loop(
                         &conn,
                         &mut state,
@@ -787,5 +876,45 @@ mod tests {
         state.frame_callback.ready_for_next_frame = true;
         state.buffers.max_in_flight = 0;
         assert_eq!(renderer_poll_events(&state), 0);
+    }
+}
+
+#[cfg(test)]
+mod presentation_reconfigure_tests {
+    use super::presentation_only_reconfigure;
+    use crate::config::Config;
+
+    #[test]
+    fn transform_only_change_is_presentation_only() {
+        let current = Config::default();
+        let mut desired = current.clone();
+
+        desired.renderer.zoom = 2.0;
+        desired.renderer.position_x = -0.5;
+        desired.renderer.position_y = 0.25;
+        desired.renderer.rotation_degrees = 90;
+
+        assert!(presentation_only_reconfigure(&current, &desired));
+    }
+
+    #[test]
+    fn source_change_still_requires_renderer_reconfigure() {
+        let current = Config::default();
+        let mut desired = current.clone();
+
+        desired.renderer.source = "/different/wallpaper".to_string();
+
+        assert!(!presentation_only_reconfigure(&current, &desired));
+    }
+
+    #[test]
+    fn render_resolution_change_still_requires_renderer_reconfigure() {
+        let current = Config::default();
+        let mut desired = current.clone();
+
+        desired.renderer.render_width = Some(2560);
+        desired.renderer.render_height = Some(1440);
+
+        assert!(!presentation_only_reconfigure(&current, &desired));
     }
 }
