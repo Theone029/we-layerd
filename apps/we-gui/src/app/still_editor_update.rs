@@ -51,6 +51,7 @@ pub(crate) fn update(app: &mut App, message: StillEditorMessage) -> Task<Message
             }
 
             let staged_path = draft.source_path.clone();
+            let original_name = draft.original_name.clone();
             let title = app.still_editor.title.clone();
             let editor = app.still_editor.clone();
 
@@ -58,7 +59,7 @@ pub(crate) fn update(app: &mut App, message: StillEditorMessage) -> Task<Message
             app.still_editor_busy = true;
 
             return Task::perform(
-                still_import::import(workshop_root, staged_path.clone(), title),
+                still_import::import(workshop_root, staged_path.clone(), original_name, title),
                 move |result| Message::StillImportCompleted {
                     staged_path,
                     editor,

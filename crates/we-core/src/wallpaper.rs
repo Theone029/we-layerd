@@ -34,6 +34,12 @@ pub struct WallpaperEntry {
     pub recent_key: u64,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct WeLayerdProjectMetadata {
+    #[serde(default)]
+    original_name: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ProjectJson {
     #[serde(default)]
@@ -42,6 +48,8 @@ struct ProjectJson {
     r#type: String,
     #[serde(default)]
     file: String,
+    #[serde(default)]
+    we_layerd: WeLayerdProjectMetadata,
 }
 
 pub fn scan_workshop_wallpapers(workshop_app_root: &Path) -> Result<Vec<WallpaperEntry>> {
@@ -70,11 +78,15 @@ pub fn scan_workshop_wallpapers(workshop_app_root: &Path) -> Result<Vec<Wallpape
         let source_file =
             if meta.file.trim().is_empty() { None } else { Some(path.join(meta.file)) };
         let preview = detect_preview_image(&path);
-        let source_name = source_file
-            .as_ref()
-            .and_then(|source| source.file_name())
-            .and_then(|name| name.to_str())
-            .map(ToOwned::to_owned);
+        let source_name = if meta.we_layerd.original_name.trim().is_empty() {
+            source_file
+                .as_ref()
+                .and_then(|source| source.file_name())
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned)
+        } else {
+            Some(meta.we_layerd.original_name.clone())
+        };
         let imported = id.starts_with("local-image-") || id.starts_with("local-media-");
         let recent_key = fs::metadata(&project_json)
             .and_then(|metadata| metadata.modified())

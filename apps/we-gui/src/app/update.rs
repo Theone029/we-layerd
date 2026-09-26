@@ -98,6 +98,8 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 
             match result {
                 Ok(mut draft) => {
+                    draft.original_name = display_name.chars().take(240).collect();
+
                     let title = Path::new(&display_name)
                         .file_stem()
                         .and_then(|value| value.to_str())

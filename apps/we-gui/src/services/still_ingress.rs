@@ -8,8 +8,8 @@ use std::{
 };
 
 use we_core::ingress::{
-    StillIngressResponseHeader, StillIngressStatus, STILL_INGRESS_MAX_HEADER_BYTES,
-    STILL_INGRESS_REQUEST_LINE,
+    MediaIngressResponseHeader, MediaIngressStatus, MEDIA_INGRESS_MAX_HEADER_BYTES,
+    MEDIA_INGRESS_REQUEST_LINE,
 };
 
 const DEFAULT_SOCKET: &str = "/run/wallpaper-private-ingress/image.sock";
@@ -51,34 +51,34 @@ fn pick_sync(
     staging_root: &Path,
 ) -> Result<Option<StillIngressSelection>, String> {
     let mut stream = UnixStream::connect(socket_path).map_err(|error| {
-        format!("secure image picker is unavailable at {}: {error}", socket_path.display())
+        format!("secure media picker is unavailable at {}: {error}", socket_path.display())
     })?;
 
     stream
-        .write_all(STILL_INGRESS_REQUEST_LINE.as_bytes())
-        .map_err(|error| format!("failed to request secure image picker: {error}"))?;
+        .write_all(MEDIA_INGRESS_REQUEST_LINE.as_bytes())
+        .map_err(|error| format!("failed to request secure media picker: {error}"))?;
 
     let mut reader = BufReader::new(stream);
 
-    let line = read_bounded_line(&mut reader, STILL_INGRESS_MAX_HEADER_BYTES)?;
+    let line = read_bounded_line(&mut reader, MEDIA_INGRESS_MAX_HEADER_BYTES)?;
 
-    let header = StillIngressResponseHeader::decode_line(&line)?;
+    let header = MediaIngressResponseHeader::decode_line(&line)?;
 
     match header.status {
-        StillIngressStatus::Cancel => Ok(None),
+        MediaIngressStatus::Cancel => Ok(None),
 
-        StillIngressStatus::Error => {
-            Err(header.message.unwrap_or_else(|| "secure image picker failed".to_string()))
+        MediaIngressStatus::Error => {
+            Err(header.message.unwrap_or_else(|| "secure media picker failed".to_string()))
         }
 
-        StillIngressStatus::Ok => {
+        MediaIngressStatus::Ok => {
             let display_name = header
                 .name
-                .ok_or_else(|| "secure image picker omitted the file name".to_string())?;
+                .ok_or_else(|| "secure media picker omitted the file name".to_string())?;
 
             fs::create_dir_all(staging_root).map_err(|error| {
                 format!(
-                    "failed to create private image staging {}: {error}",
+                    "failed to create private media staging {}: {error}",
                     staging_root.display()
                 )
             })?;
@@ -96,7 +96,7 @@ fn pick_sync(
             }
 
             file.sync_all().map_err(|error| {
-                format!("failed to sync private image staging {}: {error}", path.display())
+                format!("failed to sync private media staging {}: {error}", path.display())
             })?;
 
             Ok(Some(StillIngressSelection { source_path: path, display_name }))
@@ -110,10 +110,10 @@ fn read_bounded_line<R: BufRead>(reader: &mut R, max_len: usize) -> Result<Vec<u
     loop {
         let available = reader
             .fill_buf()
-            .map_err(|error| format!("failed to read secure image picker response: {error}"))?;
+            .map_err(|error| format!("failed to read secure media picker response: {error}"))?;
 
         if available.is_empty() {
-            return Err("secure image picker closed before sending a header".to_string());
+            return Err("secure media picker closed before sending a header".to_string());
         }
 
         let count = available
@@ -123,7 +123,7 @@ fn read_bounded_line<R: BufRead>(reader: &mut R, max_len: usize) -> Result<Vec<u
             .unwrap_or(available.len());
 
         if result.len().saturating_add(count) > max_len {
-            return Err("secure image picker header exceeds limit".to_string());
+            return Err("secure media picker header exceeds limit".to_string());
         }
 
         result.extend_from_slice(&available[..count]);
@@ -145,17 +145,17 @@ fn receive_payload<R: Read>(reader: &mut R, file: &mut File, length: u64) -> Res
 
         let count = reader
             .read(&mut buffer[..wanted])
-            .map_err(|error| format!("failed to receive selected image: {error}"))?;
+            .map_err(|error| format!("failed to receive selected media: {error}"))?;
 
         if count == 0 {
             return Err(format!(
-                "secure image picker truncated payload: \
+                "secure media picker truncated payload: \
                  expected {length} bytes"
             ));
         }
 
         file.write_all(&buffer[..count])
-            .map_err(|error| format!("failed to stage selected image: {error}"))?;
+            .map_err(|error| format!("failed to stage selected media: {error}"))?;
 
         remaining -= count as u64;
     }
@@ -166,7 +166,7 @@ fn receive_payload<R: Read>(reader: &mut R, file: &mut File, length: u64) -> Res
 fn create_staging_file(root: &Path) -> Result<(File, PathBuf), String> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("system clock unavailable for image staging: {error}"))?
+        .map_err(|error| format!("system clock unavailable for media staging: {error}"))?
         .as_nanos();
 
     for attempt in 0..1000_u32 {
@@ -183,14 +183,14 @@ fn create_staging_file(root: &Path) -> Result<(File, PathBuf), String> {
             }
             Err(error) => {
                 return Err(format!(
-                    "failed to create private image staging {}: {error}",
+                    "failed to create private media staging {}: {error}",
                     path.display()
                 ));
             }
         }
     }
 
-    Err("could not allocate private image staging file".to_string())
+    Err("could not allocate private media staging file".to_string())
 }
 
 #[cfg(unix)]
@@ -198,7 +198,7 @@ fn private_dir_permissions(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
 
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|error| {
-        format!("failed to secure image staging directory {}: {error}", path.display())
+        format!("failed to secure media staging directory {}: {error}", path.display())
     })
 }
 
@@ -207,7 +207,7 @@ fn private_file_permissions(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
 
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("failed to secure image staging file {}: {error}", path.display()))
+        .map_err(|error| format!("failed to secure media staging file {}: {error}", path.display()))
 }
 
 #[cfg(test)]
@@ -222,7 +222,7 @@ mod tests {
     };
 
     use we_core::ingress::{
-        StillIngressResponseHeader, STILL_INGRESS_MAX_PAYLOAD_BYTES, STILL_INGRESS_REQUEST_LINE,
+        MediaIngressResponseHeader, MEDIA_INGRESS_MAX_PAYLOAD_BYTES, MEDIA_INGRESS_REQUEST_LINE,
     };
 
     use super::pick_sync;
@@ -239,7 +239,7 @@ mod tests {
 
     fn spawn_server(
         socket: &Path,
-        header: StillIngressResponseHeader,
+        header: MediaIngressResponseHeader,
         payload: Vec<u8>,
     ) -> thread::JoinHandle<()> {
         let listener = UnixListener::bind(socket).expect("bind fake broker");
@@ -252,7 +252,7 @@ mod tests {
                 .read_line(&mut request)
                 .expect("read request");
 
-            assert_eq!(request, STILL_INGRESS_REQUEST_LINE);
+            assert_eq!(request, MEDIA_INGRESS_REQUEST_LINE);
 
             stream.write_all(&header.encode_line().expect("encode header")).expect("write header");
 
@@ -270,7 +270,7 @@ mod tests {
 
         let server = spawn_server(
             &socket,
-            StillIngressResponseHeader::ok("Vacation Photo.png", payload.len() as u64),
+            MediaIngressResponseHeader::ok("Vacation Photo.png", payload.len() as u64),
             payload.clone(),
         );
 
@@ -286,12 +286,35 @@ mod tests {
     }
 
     #[test]
+    fn payload_larger_than_transfer_buffer_is_streamed_exactly() {
+        let root = temp_root("streaming");
+        let socket = root.join("broker.sock");
+        let staging = root.join("staging");
+
+        let payload = vec![0x5a; 192 * 1024 + 17];
+
+        let server = spawn_server(
+            &socket,
+            MediaIngressResponseHeader::ok("large-frame.webp", payload.len() as u64),
+            payload.clone(),
+        );
+
+        let selection =
+            pick_sync(&socket, &staging).expect("pick succeeds").expect("selection exists");
+
+        assert_eq!(fs::read(&selection.source_path).expect("read staged payload"), payload);
+
+        server.join().expect("server");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn cancellation_creates_no_staged_file() {
         let root = temp_root("cancel");
         let socket = root.join("broker.sock");
         let staging = root.join("staging");
 
-        let server = spawn_server(&socket, StillIngressResponseHeader::cancel(), Vec::new());
+        let server = spawn_server(&socket, MediaIngressResponseHeader::cancel(), Vec::new());
 
         assert!(pick_sync(&socket, &staging).expect("cancel response").is_none());
 
@@ -309,7 +332,7 @@ mod tests {
 
         let server = spawn_server(
             &socket,
-            StillIngressResponseHeader::ok("too-large.png", STILL_INGRESS_MAX_PAYLOAD_BYTES + 1),
+            MediaIngressResponseHeader::ok("too-large.png", MEDIA_INGRESS_MAX_PAYLOAD_BYTES + 1),
             Vec::new(),
         );
 
@@ -330,7 +353,7 @@ mod tests {
 
         let server = spawn_server(
             &socket,
-            StillIngressResponseHeader::ok("broken.png", 100),
+            MediaIngressResponseHeader::ok("broken.png", 100),
             b"short".to_vec(),
         );
 

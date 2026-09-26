@@ -10,7 +10,7 @@ use std::{
 };
 
 use we_core::ingress::{
-    StillIngressResponseHeader, STILL_INGRESS_MAX_PAYLOAD_BYTES, STILL_INGRESS_REQUEST_LINE,
+    MediaIngressResponseHeader, MEDIA_INGRESS_MAX_PAYLOAD_BYTES, MEDIA_INGRESS_REQUEST_LINE,
 };
 
 const DEFAULT_SOCKET: &str = "/run/wallpaper-private-ingress/image.sock";
@@ -89,19 +89,24 @@ fn handle_request(stream: &mut UnixStream) -> Result<(), String> {
     .read_line(&mut request)
     .map_err(|error| format!("cannot read picker request: {error}"))?;
 
-    if request != STILL_INGRESS_REQUEST_LINE {
-        send_header(stream, StillIngressResponseHeader::error("unsupported picker request"))?;
+    if request != MEDIA_INGRESS_REQUEST_LINE {
+        send_header(stream, MediaIngressResponseHeader::error("unsupported picker request"))?;
 
         return Ok(());
     }
 
     let selected = rfd::FileDialog::new()
-        .set_title("Choose wallpaper image")
-        .add_filter("Images", &["png", "jpg", "jpeg"])
+        .set_title("Choose wallpaper media")
+        .add_filter(
+            "Supported media",
+            &["png", "jpg", "jpeg", "webp", "gif", "mp4", "webm", "mov", "mkv"],
+        )
+        .add_filter("Still images", &["png", "jpg", "jpeg", "webp"])
+        .add_filter("Animated/video", &["gif", "mp4", "webm", "mov", "mkv"])
         .pick_file();
 
     let Some(path) = selected else {
-        send_header(stream, StillIngressResponseHeader::cancel())?;
+        send_header(stream, MediaIngressResponseHeader::cancel())?;
         return Ok(());
     };
 
@@ -110,21 +115,21 @@ fn handle_request(stream: &mut UnixStream) -> Result<(), String> {
 
 fn send_selected_file(stream: &mut UnixStream, path: &Path) -> Result<(), String> {
     let mut file = File::open(path).map_err(|error| {
-        send_error_best_effort(stream, format!("cannot open selected image: {error}"));
+        send_error_best_effort(stream, format!("cannot open selected media: {error}"));
 
-        format!("cannot open selected image {}: {error}", path.display())
+        format!("cannot open selected media {}: {error}", path.display())
     })?;
 
     let metadata = file.metadata().map_err(|error| {
-        send_error_best_effort(stream, format!("cannot inspect selected image: {error}"));
+        send_error_best_effort(stream, format!("cannot inspect selected media: {error}"));
 
-        format!("cannot inspect selected image {}: {error}", path.display())
+        format!("cannot inspect selected media {}: {error}", path.display())
     })?;
 
     if !metadata.is_file() {
         send_header(
             stream,
-            StillIngressResponseHeader::error("selected image is not a regular file"),
+            MediaIngressResponseHeader::error("selected media is not a regular file"),
         )?;
         return Ok(());
     }
@@ -132,14 +137,17 @@ fn send_selected_file(stream: &mut UnixStream, path: &Path) -> Result<(), String
     let length = metadata.len();
 
     if length == 0 {
-        send_header(stream, StillIngressResponseHeader::error("selected image is empty"))?;
+        send_header(stream, MediaIngressResponseHeader::error("selected media is empty"))?;
         return Ok(());
     }
 
-    if length > STILL_INGRESS_MAX_PAYLOAD_BYTES {
+    if length > MEDIA_INGRESS_MAX_PAYLOAD_BYTES {
         send_header(
             stream,
-            StillIngressResponseHeader::error("selected image exceeds the 128 MiB limit"),
+            MediaIngressResponseHeader::error(format!(
+                "selected media exceeds the {} GiB transport limit",
+                MEDIA_INGRESS_MAX_PAYLOAD_BYTES / (1024 * 1024 * 1024)
+            )),
         )?;
         return Ok(());
     }
@@ -148,26 +156,26 @@ fn send_selected_file(stream: &mut UnixStream, path: &Path) -> Result<(), String
         .file_name()
         .map(|name| name.to_string_lossy().chars().take(240).collect())
         .filter(|name: &String| !name.trim().is_empty())
-        .unwrap_or_else(|| "wallpaper-image".to_string());
+        .unwrap_or_else(|| "wallpaper-media".to_string());
 
-    send_header(stream, StillIngressResponseHeader::ok(name, length))?;
+    send_header(stream, MediaIngressResponseHeader::ok(name, length))?;
 
     let mut limited = std::io::Read::take(&mut file, length);
 
     let copied = io::copy(&mut limited, stream)
-        .map_err(|error| format!("failed to transfer selected image: {error}"))?;
+        .map_err(|error| format!("failed to transfer selected media: {error}"))?;
 
     if copied != length {
         return Err(format!(
-            "selected image changed during transfer: \
+            "selected media changed during transfer: \
              expected {length} bytes, sent {copied}"
         ));
     }
 
-    stream.flush().map_err(|error| format!("failed to flush selected image: {error}"))
+    stream.flush().map_err(|error| format!("failed to flush selected media: {error}"))
 }
 
-fn send_header(stream: &mut UnixStream, header: StillIngressResponseHeader) -> Result<(), String> {
+fn send_header(stream: &mut UnixStream, header: MediaIngressResponseHeader) -> Result<(), String> {
     stream
         .write_all(
             &header
@@ -180,6 +188,6 @@ fn send_header(stream: &mut UnixStream, header: StillIngressResponseHeader) -> R
 fn send_error_best_effort(stream: &mut UnixStream, message: String) {
     let _ = send_header(
         stream,
-        StillIngressResponseHeader::error(message.chars().take(512).collect::<String>()),
+        MediaIngressResponseHeader::error(message.chars().take(512).collect::<String>()),
     );
 }

@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufReader, Cursor, Write},
+    io::{self, BufReader, Cursor, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -23,13 +23,14 @@ const STILL_PREVIEW_MAX_HEIGHT: u32 = 270;
 const STILL_EDITOR_CANVAS_MAX_WIDTH: u32 = 480;
 const STILL_EDITOR_CANVAS_MAX_HEIGHT: u32 = 270;
 
-const SOURCE_FILE_NAME: &str = "source.png";
+const RENDERED_FILE_NAME: &str = "rendered.png";
 const PREVIEW_FILE_NAME: &str = "preview.png";
 const PROJECT_FILE_NAME: &str = "project.json";
 
 #[derive(Debug, Clone)]
 pub(crate) struct StillImageDraft {
     pub(crate) source_path: PathBuf,
+    pub(crate) original_name: String,
     pub(crate) title: String,
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -43,6 +44,7 @@ pub(crate) struct StillImageDraft {
 pub(crate) struct StillImportResult {
     pub(crate) id: String,
     pub(crate) directory: PathBuf,
+    pub(crate) original_path: PathBuf,
     pub(crate) source_path: PathBuf,
     pub(crate) preview_path: PathBuf,
     pub(crate) width: u32,
@@ -57,13 +59,14 @@ pub(crate) async fn inspect(path: PathBuf) -> Result<StillImageDraft, String> {
 pub(crate) async fn import(
     workshop_root: PathBuf,
     source_path: PathBuf,
+    original_name: String,
     title: String,
 ) -> Result<StillImportResult, String> {
-    import_sync(&workshop_root, &source_path, &title)
+    import_sync(&workshop_root, &source_path, &original_name, &title)
 }
 
 fn inspect_sync(path: &Path) -> Result<StillImageDraft, String> {
-    let decoded = decode_still(path)?;
+    let (decoded, _) = decode_still(path)?;
     let (width, height) = decoded.dimensions();
 
     let preview = decoded.thumbnail(STILL_PREVIEW_MAX_WIDTH, STILL_PREVIEW_MAX_HEIGHT);
@@ -76,6 +79,13 @@ fn inspect_sync(path: &Path) -> Result<StillImageDraft, String> {
 
     Ok(StillImageDraft {
         source_path: path.to_path_buf(),
+        original_name: path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("wallpaper")
+            .chars()
+            .take(240)
+            .collect(),
         title: normalized_title("", path),
         width,
         height,
@@ -208,27 +218,34 @@ fn normalized_destination_offset(canvas: u32, destination: u32, position: f32) -
 fn import_sync(
     workshop_root: &Path,
     source_path: &Path,
+    original_name: &str,
     requested_title: &str,
 ) -> Result<StillImportResult, String> {
-    let decoded = decode_still(source_path)?;
+    let (decoded, source_format) = decode_still(source_path)?;
     let (width, height) = decoded.dimensions();
 
-    let source_png = encode_png(&decoded)?;
+    let rendered_png = encode_png(&decoded)?;
     let preview = decoded.thumbnail(STILL_PREVIEW_MAX_WIDTH, STILL_PREVIEW_MAX_HEIGHT);
     let preview_png = encode_png(&preview)?;
 
-    let title = normalized_title(requested_title, source_path);
-    let base_id = format!("local-image-{:016x}", fnv1a64(&source_png));
+    let original_extension = original_extension(source_format)?;
+    let original_file_name = format!("original.{original_extension}");
+    let original_name = normalized_original_name(original_name, original_extension);
+    let title = normalized_title(requested_title, Path::new(&original_name));
+
+    let exact_hash = fnv1a64_file(source_path)?;
+    let base_id = format!("local-media-{exact_hash:016x}");
 
     fs::create_dir_all(workshop_root).map_err(|error| {
         format!("failed to create wallpaper library {}: {error}", workshop_root.display())
     })?;
     private_dir_permissions(workshop_root)?;
 
-    let (id, destination) = choose_destination(workshop_root, &base_id, &source_png)?;
+    let (id, destination) =
+        choose_destination(workshop_root, &base_id, source_path, &original_file_name)?;
 
     if destination.exists() {
-        return existing_result(id, destination, width, height);
+        return existing_result(id, destination, width, height, &original_file_name);
     }
 
     let temp = workshop_root.join(format!(".{id}.tmp-{}", std::process::id()));
@@ -243,21 +260,26 @@ fn import_sync(
         .map_err(|error| format!("failed to create import staging {}: {error}", temp.display()))?;
     private_dir_permissions(&temp)?;
 
-    let source_out = temp.join(SOURCE_FILE_NAME);
+    let original_out = temp.join(&original_file_name);
+    let rendered_out = temp.join(RENDERED_FILE_NAME);
     let preview_out = temp.join(PREVIEW_FILE_NAME);
     let project_out = temp.join(PROJECT_FILE_NAME);
 
     let install_result = (|| -> Result<(), String> {
-        write_private_file(&source_out, &source_png)?;
+        copy_private_file(source_path, &original_out)?;
+        write_private_file(&rendered_out, &rendered_png)?;
         write_private_file(&preview_out, &preview_png)?;
 
         let mut project_json = serde_json::to_vec_pretty(&json!({
             "title": title,
             "type": "video",
-            "file": SOURCE_FILE_NAME,
+            "file": RENDERED_FILE_NAME,
             "we_layerd": {
                 "kind": "image",
-                "version": 1
+                "version": 2,
+                "original_name": original_name,
+                "original_file": original_file_name,
+                "rendered_file": RENDERED_FILE_NAME
             }
         }))
         .map_err(|error| format!("failed to serialize imported wallpaper metadata: {error}"))?;
@@ -281,7 +303,8 @@ fn import_sync(
 
     Ok(StillImportResult {
         id,
-        source_path: destination.join(SOURCE_FILE_NAME),
+        original_path: destination.join(&original_file_name),
+        source_path: destination.join(RENDERED_FILE_NAME),
         preview_path: destination.join(PREVIEW_FILE_NAME),
         directory: destination,
         width,
@@ -290,7 +313,7 @@ fn import_sync(
     })
 }
 
-fn decode_still(path: &Path) -> Result<DynamicImage, String> {
+fn decode_still(path: &Path) -> Result<(DynamicImage, ImageFormat), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("cannot inspect image {}: {error}", path.display()))?;
 
@@ -307,7 +330,7 @@ fn decode_still(path: &Path) -> Result<DynamicImage, String> {
 
     if metadata.len() > STILL_MAX_INPUT_BYTES {
         return Err(format!(
-            "image source exceeds the {} MiB input limit",
+            "still image exceeds the {} MiB decode limit",
             STILL_MAX_INPUT_BYTES / (1024 * 1024)
         ));
     }
@@ -324,9 +347,9 @@ fn decode_still(path: &Path) -> Result<DynamicImage, String> {
         .format()
         .ok_or_else(|| format!("cannot determine image format for {}", path.display()))?;
 
-    if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg) {
+    if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP) {
         return Err(format!(
-            "unsupported still-image format for {}; use PNG or JPEG",
+            "unsupported still-image format for {}; use PNG, JPEG, or WebP",
             path.display()
         ));
     }
@@ -337,7 +360,32 @@ fn decode_still(path: &Path) -> Result<DynamicImage, String> {
     limits.max_alloc = Some(STILL_DECODER_MAX_ALLOC);
     reader.limits(limits);
 
-    reader.decode().map_err(|error| format!("cannot decode image {}: {error}", path.display()))
+    let decoded = reader
+        .decode()
+        .map_err(|error| format!("cannot decode image {}: {error}", path.display()))?;
+
+    Ok((decoded, format))
+}
+
+fn original_extension(format: ImageFormat) -> Result<&'static str, String> {
+    match format {
+        ImageFormat::Png => Ok("png"),
+        ImageFormat::Jpeg => Ok("jpg"),
+        ImageFormat::WebP => Ok("webp"),
+        other => Err(format!("unsupported exact-original format: {other:?}")),
+    }
+}
+
+fn normalized_original_name(name: &str, fallback_extension: &str) -> String {
+    let clean = Path::new(name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().filter(|ch| !ch.is_control()).take(240).collect::<String>())
+        .filter(|value| !value.is_empty());
+
+    clean.unwrap_or_else(|| format!("wallpaper.{fallback_extension}"))
 }
 
 fn encode_png(image: &DynamicImage) -> Result<Vec<u8>, String> {
@@ -370,33 +418,28 @@ fn normalized_title(requested: &str, source: &Path) -> String {
 fn choose_destination(
     root: &Path,
     base_id: &str,
-    source_png: &[u8],
+    source_path: &Path,
+    original_file_name: &str,
 ) -> Result<(String, PathBuf), String> {
     for suffix in 0..10_000_u32 {
         let id = if suffix == 0 { base_id.to_string() } else { format!("{base_id}-{suffix}") };
-
         let destination = root.join(&id);
 
         if !destination.exists() {
             return Ok((id, destination));
         }
 
-        let existing_source = destination.join(SOURCE_FILE_NAME);
+        let existing_original = destination.join(original_file_name);
 
-        if existing_source.is_file() {
-            let existing = fs::read(&existing_source).map_err(|error| {
-                format!("failed to compare existing import {}: {error}", existing_source.display())
-            })?;
-
-            if existing == source_png {
-                if !destination.join(PROJECT_FILE_NAME).is_file()
-                    || !destination.join(PREVIEW_FILE_NAME).is_file()
-                {
-                    return Err(format!("existing import {} is incomplete", destination.display()));
-                }
-
-                return Ok((id, destination));
+        if existing_original.is_file() && files_equal(source_path, &existing_original)? {
+            if !destination.join(PROJECT_FILE_NAME).is_file()
+                || !destination.join(PREVIEW_FILE_NAME).is_file()
+                || !destination.join(RENDERED_FILE_NAME).is_file()
+            {
+                return Err(format!("existing import {} is incomplete", destination.display()));
             }
+
+            return Ok((id, destination));
         }
     }
 
@@ -408,11 +451,14 @@ fn existing_result(
     directory: PathBuf,
     width: u32,
     height: u32,
+    original_file_name: &str,
 ) -> Result<StillImportResult, String> {
-    let source_path = directory.join(SOURCE_FILE_NAME);
+    let original_path = directory.join(original_file_name);
+    let source_path = directory.join(RENDERED_FILE_NAME);
     let preview_path = directory.join(PREVIEW_FILE_NAME);
 
-    if !source_path.is_file()
+    if !original_path.is_file()
+        || !source_path.is_file()
         || !preview_path.is_file()
         || !directory.join(PROJECT_FILE_NAME).is_file()
     {
@@ -422,6 +468,7 @@ fn existing_result(
     Ok(StillImportResult {
         id,
         directory,
+        original_path,
         source_path,
         preview_path,
         width,
@@ -430,15 +477,94 @@ fn existing_result(
     })
 }
 
-fn fnv1a64(bytes: &[u8]) -> u64 {
+fn fnv1a64_file(path: &Path) -> Result<u64, String> {
+    let mut file =
+        File::open(path).map_err(|error| format!("failed to hash {}: {error}", path.display()))?;
     let mut hash = 0xcbf29ce484222325_u64;
+    let mut buffer = [0_u8; 64 * 1024];
 
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to hash {}: {error}", path.display()))?;
+
+        if count == 0 {
+            return Ok(hash);
+        }
+
+        for byte in &buffer[..count] {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+}
+
+fn files_equal(left: &Path, right: &Path) -> Result<bool, String> {
+    let left_len = fs::metadata(left)
+        .map_err(|error| format!("failed to inspect {}: {error}", left.display()))?
+        .len();
+    let right_len = fs::metadata(right)
+        .map_err(|error| format!("failed to inspect {}: {error}", right.display()))?
+        .len();
+
+    if left_len != right_len {
+        return Ok(false);
     }
 
-    hash
+    let mut left =
+        File::open(left).map_err(|error| format!("failed to open {}: {error}", left.display()))?;
+    let mut right = File::open(right)
+        .map_err(|error| format!("failed to open {}: {error}", right.display()))?;
+    let mut left_buffer = [0_u8; 64 * 1024];
+    let mut right_buffer = [0_u8; 64 * 1024];
+
+    loop {
+        let left_count = left
+            .read(&mut left_buffer)
+            .map_err(|error| format!("failed to compare exact original: {error}"))?;
+        let right_count = right
+            .read(&mut right_buffer)
+            .map_err(|error| format!("failed to compare exact original: {error}"))?;
+
+        if left_count != right_count {
+            return Ok(false);
+        }
+        if left_count == 0 {
+            return Ok(true);
+        }
+        if left_buffer[..left_count] != right_buffer[..right_count] {
+            return Ok(false);
+        }
+    }
+}
+
+fn copy_private_file(source: &Path, destination: &Path) -> Result<(), String> {
+    let expected = fs::metadata(source)
+        .map_err(|error| format!("failed to inspect exact original {}: {error}", source.display()))?
+        .len();
+
+    let mut input = File::open(source)
+        .map_err(|error| format!("failed to open {}: {error}", source.display()))?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+
+    let copied = io::copy(&mut input, &mut output)
+        .map_err(|error| format!("failed to preserve exact original: {error}"))?;
+
+    if copied != expected {
+        return Err(format!(
+            "exact-original copy length changed: expected {expected} bytes, copied {copied}"
+        ));
+    }
+
+    output
+        .sync_all()
+        .map_err(|error| format!("failed to sync {}: {error}", destination.display()))?;
+
+    private_file_permissions(destination)
 }
 
 fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -512,7 +638,7 @@ mod tests {
 
     use super::{
         compose_editor_preview, import_sync, inspect_sync, PREVIEW_FILE_NAME, PROJECT_FILE_NAME,
-        SOURCE_FILE_NAME,
+        RENDERED_FILE_NAME,
     };
 
     fn temp_root(label: &str) -> PathBuf {
@@ -581,19 +707,29 @@ mod tests {
     }
 
     #[test]
-    fn import_png_creates_renderer_compatible_private_project() {
+    fn png_import_preserves_exact_original_and_separate_renderer_derivative() {
         let root = temp_root("png");
         let library = root.join("library");
-        let source = root.join("source.png");
+        let source = root.join("opaque-upload.bin");
         fixture_image(&source, ImageFormat::Png);
+        let exact = fs::read(&source).expect("read source");
 
-        let imported = import_sync(&library, &source, "Local Test").expect("import PNG");
+        let imported =
+            import_sync(&library, &source, "Vacation Photo.png", "Local Test").expect("import PNG");
 
         assert!(imported.created);
-        assert!(imported.id.starts_with("local-image-"));
+        assert!(imported.id.starts_with("local-media-"));
+        assert_eq!(
+            imported.original_path.file_name().and_then(|name| name.to_str()),
+            Some("original.png")
+        );
+        assert_eq!(fs::read(&imported.original_path).expect("read exact original"), exact);
         assert!(imported.directory.join(PROJECT_FILE_NAME).is_file());
-        assert!(imported.directory.join(SOURCE_FILE_NAME).is_file());
+        assert!(imported.directory.join(RENDERED_FILE_NAME).is_file());
         assert!(imported.directory.join(PREVIEW_FILE_NAME).is_file());
+
+        let rendered = fs::read(&imported.source_path).expect("read renderer derivative");
+        assert!(rendered.starts_with(b"\x89PNG\r\n\x1a\n"));
 
         let project: serde_json::Value = serde_json::from_slice(
             &fs::read(imported.directory.join(PROJECT_FILE_NAME)).expect("read project.json"),
@@ -602,9 +738,11 @@ mod tests {
 
         assert_eq!(project["title"], "Local Test");
         assert_eq!(project["type"], "video");
-        assert_eq!(project["file"], SOURCE_FILE_NAME);
+        assert_eq!(project["file"], RENDERED_FILE_NAME);
         assert_eq!(project["we_layerd"]["kind"], "image");
-        assert_eq!(project["we_layerd"]["version"], 1);
+        assert_eq!(project["we_layerd"]["version"], 2);
+        assert_eq!(project["we_layerd"]["original_name"], "Vacation Photo.png");
+        assert_eq!(project["we_layerd"]["original_file"], "original.png");
 
         let entries = scan_workshop_wallpapers(&library).expect("scan imported library");
 
@@ -612,10 +750,11 @@ mod tests {
         assert_eq!(entries[0].id, imported.id);
         assert_eq!(entries[0].ty, WallpaperType::Video);
         assert_eq!(entries[0].source_file.as_deref(), Some(imported.source_path.as_path()));
+        assert_eq!(entries[0].source_name.as_deref(), Some("Vacation Photo.png"));
         assert_eq!(entries[0].preview.as_deref(), Some(imported.preview_path.as_path()));
 
-        let duplicate =
-            import_sync(&library, &source, "Different title").expect("repeat identical import");
+        let duplicate = import_sync(&library, &source, "Renamed copy.png", "Different title")
+            .expect("repeat identical import");
 
         assert!(!duplicate.created);
         assert_eq!(duplicate.id, imported.id);
@@ -625,34 +764,62 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_input_is_normalized_to_png_transport() {
-        let root = temp_root("jpeg");
-        let library = root.join("library");
-        let source = root.join("photo.jpg");
-        fixture_image(&source, ImageFormat::Jpeg);
+    fn jpeg_and_webp_keep_exact_bytes_while_rendering_png() {
+        for (label, format, display_name, expected_file) in [
+            ("jpeg", ImageFormat::Jpeg, "Camera Original.JPG", "original.jpg"),
+            ("webp", ImageFormat::WebP, "Downloaded Art.webp", "original.webp"),
+        ] {
+            let root = temp_root(label);
+            let library = root.join("library");
+            let source = root.join(format!("{label}.payload"));
+            fixture_image(&source, format);
+            let exact = fs::read(&source).expect("read source");
 
-        let imported = import_sync(&library, &source, "").expect("import JPEG");
+            let imported =
+                import_sync(&library, &source, display_name, "").expect("import supported still");
 
-        let normalized = fs::read(&imported.source_path).expect("read normalized PNG");
+            assert_eq!(
+                imported.original_path.file_name().and_then(|name| name.to_str()),
+                Some(expected_file)
+            );
+            assert_eq!(fs::read(&imported.original_path).expect("read exact original"), exact);
+            assert!(fs::read(&imported.source_path)
+                .expect("read rendered PNG")
+                .starts_with(b"\x89PNG\r\n\x1a\n"));
 
-        assert!(normalized.starts_with(b"\x89PNG\r\n\x1a\n"));
+            let entries = scan_workshop_wallpapers(&library).expect("scan imported library");
+            assert_eq!(entries[0].source_name.as_deref(), Some(display_name));
+
+            fs::remove_dir_all(root).expect("remove fixture");
+        }
+    }
+
+    #[test]
+    fn content_probe_does_not_trust_filename_extension() {
+        let root = temp_root("probe");
+        let source = root.join("not-an-image.txt");
+        fixture_image(&source, ImageFormat::WebP);
+
+        let draft = inspect_sync(&source).expect("WebP content probe");
+
+        assert_eq!((draft.width, draft.height), (64, 48));
 
         fs::remove_dir_all(root).expect("remove fixture");
     }
 
     #[test]
-    fn animated_gif_is_rejected_by_still_import_path() {
+    fn unsupported_animated_media_fails_before_project_residue() {
         let root = temp_root("gif");
+        let library = root.join("library");
         let source = root.join("animated.gif");
 
         fs::write(&source, b"GIF89a\x01\x00\x01\x00\x00\x00\x00").expect("write GIF signature");
 
-        let error = match inspect_sync(&source) {
-            Ok(_) => panic!("GIF must not enter still-image import"),
-            Err(error) => error,
-        };
+        let error =
+            import_sync(&library, &source, "animated.gif", "Animated").expect_err("GIF remains M3");
 
-        assert!(error.contains("PNG or JPEG"), "unexpected error: {error}");
+        assert!(error.contains("PNG, JPEG, or WebP"), "unexpected error: {error}");
+        assert!(!library.exists());
 
         fs::remove_dir_all(root).expect("remove fixture");
     }
@@ -667,7 +834,7 @@ mod tests {
         let source = root.join("source.png");
         fixture_image(&source, ImageFormat::Png);
 
-        let imported = import_sync(&library, &source, "Private").expect("import PNG");
+        let imported = import_sync(&library, &source, "source.png", "Private").expect("import PNG");
 
         assert_eq!(
             fs::metadata(&imported.directory).expect("directory metadata").permissions().mode()
@@ -676,6 +843,7 @@ mod tests {
         );
 
         for path in [
+            imported.original_path,
             imported.source_path,
             imported.preview_path,
             imported.directory.join(PROJECT_FILE_NAME),
