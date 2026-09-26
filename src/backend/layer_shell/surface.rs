@@ -216,10 +216,24 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for LayerShellState {
             LayerSurfaceEvent::Configure { serial, width, height } => {
                 layer_surface.ack_configure(serial);
                 state.configured = true;
-                state.output.logical_width =
-                    if width > 0 { width } else { state.output.fallback_width };
-                state.output.logical_height =
+
+                let configured_width = if width > 0 { width } else { state.output.fallback_width };
+                let configured_height =
                     if height > 0 { height } else { state.output.fallback_height };
+                let configured_size = (configured_width, configured_height);
+
+                // The initial compositor configure establishes the full output
+                // canvas. Later configures that merely acknowledge our own
+                // fixed presentation size must not shrink that canvas.
+                let presentation_ack = state.requested_surface_size == Some(configured_size)
+                    && state.output.logical_width > 0
+                    && state.output.logical_height > 0;
+
+                if !presentation_ack {
+                    state.output.logical_width = configured_width;
+                    state.output.logical_height = configured_height;
+                }
+
                 state.update_render_extent();
                 state.update_viewport_destination();
                 update_input_region(state, qh, true);

@@ -154,10 +154,20 @@ fn apply_transform_source(
     position_x: f64,
     position_y: f64,
 ) {
-    let zoom = finite_clamp(zoom, 1.0, 1.0, 4.0);
+    let zoom = finite_clamp(zoom, 1.0, 0.1, 4.0);
     let position_x = finite_clamp(position_x, 0.0, -1.0, 1.0);
     let position_y = finite_clamp(position_y, 0.0, -1.0, 1.0);
 
+    // Zooming below 100% scales the final presentation rectangle down.
+    // The layer-shell surface is positioned separately, so the desktop
+    // remains visible around it.
+    if zoom < 1.0 {
+        geometry.viewport_width = (geometry.viewport_width as f64 * zoom).round().max(1.0) as u32;
+        geometry.viewport_height = (geometry.viewport_height as f64 * zoom).round().max(1.0) as u32;
+        return;
+    }
+
+    // Neutral transforms preserve the base Cover/Fit/Stretch geometry.
     if (zoom - 1.0).abs() < f64::EPSILON
         && position_x.abs() < f64::EPSILON
         && position_y.abs() < f64::EPSILON
@@ -165,6 +175,8 @@ fn apply_transform_source(
         return;
     }
 
+    // At 100%+ use the existing zero-copy source-window transform.
+    // Cover's base crop remains the starting rectangle.
     let render_width = geometry.render_width.max(1) as f64;
     let render_height = geometry.render_height.max(1) as f64;
 
@@ -467,6 +479,35 @@ mod tests {
         assert!(source.y >= 0.0);
         assert!(source.x + source.width <= 1920.0);
         assert!(source.y + source.height <= 1080.0);
+    }
+
+    #[test]
+    fn half_zoom_shrinks_final_stretch_destination() {
+        let mut output = OutputState::new(ScaleMode::Stretch);
+        output.logical_width = 1920;
+        output.logical_height = 1080;
+        output.output_mode_width = 1920;
+        output.output_mode_height = 1080;
+        output.zoom = 0.5;
+        output.recompute_geometry();
+
+        assert_eq!(output.geometry.viewport_width, 960);
+        assert_eq!(output.geometry.viewport_height, 540);
+        assert!(output.geometry.viewport_source.is_none());
+    }
+
+    #[test]
+    fn ten_percent_zoom_is_supported_and_bounded() {
+        let mut output = OutputState::new(ScaleMode::Stretch);
+        output.logical_width = 1920;
+        output.logical_height = 1080;
+        output.output_mode_width = 1920;
+        output.output_mode_height = 1080;
+        output.zoom = 0.1;
+        output.recompute_geometry();
+
+        assert_eq!(output.geometry.viewport_width, 192);
+        assert_eq!(output.geometry.viewport_height, 108);
     }
 
     #[test]

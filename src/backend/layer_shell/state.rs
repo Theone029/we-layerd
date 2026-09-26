@@ -146,6 +146,7 @@ pub(crate) struct LayerShellState {
     pub(super) presentation_geometry: PresentationGeometry,
     pub(super) pointer_input: PointerInputState,
     pub(super) last_input_region: Option<(u32, u32)>,
+    pub(super) requested_surface_size: Option<(u32, u32)>,
     pub(super) buffers: BufferBookkeeping,
     pub(super) frame_callback: FrameCallbackState,
     pub(super) frame_stats: FrameStats,
@@ -170,6 +171,42 @@ pub(crate) struct LayerShellState {
     pub(super) stopping: bool,
     pub(super) pending_input_events: PendingInput,
     pub(super) discovered_output_names: BTreeMap<u32, String>,
+}
+
+fn normalized_axis_margins(canvas: u32, destination: u32, position: f64) -> (i32, i32) {
+    let slack = canvas.saturating_sub(destination) as i64;
+    if slack == 0 {
+        return (0, 0);
+    }
+
+    let position = if position.is_finite() { position.clamp(-1.0, 1.0) } else { 0.0 };
+
+    // -1 -> leading edge, 0 -> centered, +1 -> trailing edge.
+    let target = (slack as f64 * ((position + 1.0) / 2.0)).round() as i64;
+
+    // With opposite anchors and a fixed surface size, equal margins preserve
+    // centering. Their difference translates that centered rectangle.
+    let delta = (2 * target) - slack;
+
+    if delta >= 0 {
+        (delta.min(i32::MAX as i64) as i32, 0)
+    } else {
+        (0, (-delta).min(i32::MAX as i64) as i32)
+    }
+}
+
+fn presentation_margins(
+    canvas_width: u32,
+    canvas_height: u32,
+    destination_width: u32,
+    destination_height: u32,
+    position_x: f64,
+    position_y: f64,
+) -> (i32, i32, i32, i32) {
+    let (left, right) = normalized_axis_margins(canvas_width, destination_width, position_x);
+    let (top, bottom) = normalized_axis_margins(canvas_height, destination_height, position_y);
+
+    (top, right, bottom, left)
 }
 
 impl LayerShellState {
@@ -212,7 +249,7 @@ impl LayerShellState {
     }
 
     fn apply_viewport_geometry(
-        &self,
+        &mut self,
         geometry: crate::backend::wayland_common::output::PresentationGeometry,
     ) {
         if let Some(viewport) = &self.objects.viewport {
@@ -232,6 +269,25 @@ impl LayerShellState {
                     );
                 }
             }
+        }
+
+        if let Some(layer_surface) = &self.objects.layer_surface {
+            let width = geometry.viewport_width.max(1);
+            let height = geometry.viewport_height.max(1);
+
+            layer_surface.set_size(width, height);
+
+            let (top, right, bottom, left) = presentation_margins(
+                self.output.logical_width.max(1),
+                self.output.logical_height.max(1),
+                width,
+                height,
+                self.output.position_x,
+                self.output.position_y,
+            );
+            layer_surface.set_margin(top, right, bottom, left);
+
+            self.requested_surface_size = Some((width, height));
         }
     }
 
@@ -407,6 +463,7 @@ impl LayerShellState {
             presentation_geometry,
             pointer_input: PointerInputState::default(),
             last_input_region: None,
+            requested_surface_size: None,
             buffers: BufferBookkeeping::default(),
             frame_callback: FrameCallbackState::default(),
             frame_stats: FrameStats::default(),
@@ -500,5 +557,22 @@ mod tests {
         let generation = state.buffers.generation;
         state.invalidate_reusable();
         assert_eq!(state.buffers.generation, generation + 1);
+    }
+}
+
+#[cfg(test)]
+mod presentation_layout_tests {
+    use super::presentation_margins;
+
+    #[test]
+    fn centered_destination_needs_no_margins() {
+        assert_eq!(presentation_margins(1920, 1080, 960, 540, 0.0, 0.0), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn normalized_position_reaches_all_destination_edges() {
+        assert_eq!(presentation_margins(1920, 1080, 960, 540, -1.0, -1.0), (0, 960, 540, 0));
+
+        assert_eq!(presentation_margins(1920, 1080, 960, 540, 1.0, 1.0), (540, 0, 0, 960));
     }
 }

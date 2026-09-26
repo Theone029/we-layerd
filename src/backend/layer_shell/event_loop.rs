@@ -454,6 +454,7 @@ pub(crate) fn run_output(ctx: BackendContext<'_>, target_output: &str) -> Result
         presentation_geometry,
         pointer_input: Default::default(),
         last_input_region: None,
+        requested_surface_size: None,
         buffers: BufferBookkeeping::default(),
         frame_callback: FrameCallbackState {
             pending: false,
