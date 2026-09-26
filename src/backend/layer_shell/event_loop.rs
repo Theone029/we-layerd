@@ -113,7 +113,7 @@ fn normalize_presentation_compare(config: &mut crate::config::Config) {
     config.renderer.rotation_degrees = 0;
 }
 
-fn presentation_only_reconfigure(
+pub(super) fn presentation_only_reconfigure(
     current: &crate::config::Config,
     desired: &crate::config::Config,
 ) -> bool {

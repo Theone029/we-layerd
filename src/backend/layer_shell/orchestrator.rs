@@ -463,17 +463,46 @@ fn reconcile_live_workers(
 }
 
 fn reconfigure_worker_in_place(worker: &mut OutputWorker, spec: &OutputSpec) -> bool {
-    if worker.handle.is_none()
-        || worker.scheduler_handle.is_some()
-        || spec.playlist_name().is_some()
-    {
+    if worker.handle.is_none() {
+        return false;
+    }
+
+    let mut next_config = spec.config.clone();
+
+    if spec.playlist_name().is_some() {
+        // Keep the existing playlist worker, cursor, timer, and scheduler alive
+        // for presentation-only changes. Materialize the currently selected
+        // wallpaper into the freshly loaded config so both sides are compared
+        // at the same effective-config layer.
+        let selection = match worker.playlist_runtime.lock() {
+            Ok(runtime) => runtime.as_ref().and_then(|runtime| runtime.current_selection()),
+            Err(_) => None,
+        };
+        let Some(selection) = selection else {
+            return false;
+        };
+
+        if playlist::apply_selection_to_config(&mut next_config, &selection).is_err() {
+            return false;
+        }
+
+        let presentation_only = match worker.desired_cfg.lock() {
+            Ok(current) => event_loop::presentation_only_reconfigure(&current, &next_config),
+            Err(_) => false,
+        };
+        if !presentation_only {
+            return false;
+        }
+    } else if worker.scheduler_handle.is_some() {
+        // Defensive invariant: a non-playlist worker should not own a
+        // playlist scheduler.
         return false;
     }
 
     let Ok(mut config) = worker.desired_cfg.lock() else {
         return false;
     };
-    *config = spec.config.clone();
+    *config = next_config;
     drop(config);
 
     if worker.control_tx.send(ControlCommand::Reconfigure).is_err() {
@@ -915,6 +944,65 @@ mod tests {
             worker.desired_cfg.lock().expect("desired config").renderer.source,
             "/wallpapers/beta"
         );
+        assert!(matches!(
+            control_rx.recv_timeout(Duration::from_millis(100)),
+            Ok(ControlCommand::Reconfigure)
+        ));
+    }
+
+    #[test]
+    fn playlist_transform_change_reuses_existing_worker_and_scheduler() {
+        let mut config = Config::default();
+
+        config.wallpapers.insert("alpha".to_string(), Default::default());
+        config.playlists.definitions.insert(
+            "Focus".to_string(),
+            Playlist {
+                items: vec![PlaylistItem {
+                    wallpaper_id: "alpha".to_string(),
+                    source: "/wallpapers/alpha".to_string(),
+                    duration_ms: None,
+                }],
+                ..Playlist::default()
+            },
+        );
+        config.outputs.insert("DP-1".to_string(), OutputBinding::playlist("Focus"));
+
+        let initial = build_output_specs(&config, &["DP-1".to_string()])
+            .expect("initial specs")
+            .remove("DP-1")
+            .expect("initial DP-1 spec");
+
+        let mut runtime = PlaylistRuntime::new(config.playlists.clone(), 7);
+        let selection = runtime.play("Focus", Instant::now()).expect("playlist selection");
+
+        let mut running_config = initial.config.clone();
+        crate::runtime::playlist::apply_selection_to_config(&mut running_config, &selection)
+            .expect("materialize current selection");
+
+        let (control_tx, control_rx) = mpsc::channel();
+        let mut worker = OutputWorker {
+            instance_id: 1,
+            fingerprint: initial.fingerprint,
+            control_tx,
+            desired_cfg: Arc::new(Mutex::new(running_config)),
+            playlist_runtime: Arc::new(Mutex::new(Some(runtime))),
+            stop_scheduler: Arc::new(AtomicBool::new(false)),
+            handle: Some(thread::spawn(|| {})),
+            scheduler_handle: Some(thread::spawn(|| {})),
+            retry_at: None,
+        };
+
+        config.wallpapers.get_mut("alpha").expect("alpha profile").zoom = 2.0;
+
+        let next = build_output_specs(&config, &["DP-1".to_string()])
+            .expect("next specs")
+            .remove("DP-1")
+            .expect("next DP-1 spec");
+
+        assert!(reconfigure_worker_in_place(&mut worker, &next));
+        assert_eq!(worker.fingerprint, next.fingerprint);
+        assert_eq!(worker.desired_cfg.lock().expect("desired config").renderer.zoom, 2.0);
         assert!(matches!(
             control_rx.recv_timeout(Duration::from_millis(100)),
             Ok(ControlCommand::Reconfigure)
