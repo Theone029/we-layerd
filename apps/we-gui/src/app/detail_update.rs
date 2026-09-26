@@ -116,7 +116,7 @@ pub(crate) fn update(app: &mut App, message: wallpaper_detail::DetailMessage) ->
 
 fn bounded_zoom(value: f32) -> f32 {
     if value.is_finite() {
-        value.clamp(1.0, 4.0)
+        value.clamp(0.1, 4.0)
     } else {
         1.0
     }
@@ -189,7 +189,8 @@ mod tests {
 
     #[test]
     fn transform_controls_use_backend_bounds() {
-        assert_eq!(bounded_zoom(0.5), 1.0);
+        assert_eq!(bounded_zoom(0.05), 0.1);
+        assert_eq!(bounded_zoom(0.5), 0.5);
         assert_eq!(bounded_zoom(2.0), 2.0);
         assert_eq!(bounded_zoom(8.0), 4.0);
         assert_eq!(bounded_zoom(f32::NAN), 1.0);

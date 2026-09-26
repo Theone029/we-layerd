@@ -319,7 +319,7 @@ fn actions_view<'a>(
                 .size(13)
                 .color(Color::from_rgb8(196, 199, 204)),
             container(
-                slider(1.0..=4.0, settings.zoom, DetailMessage::ZoomChanged)
+                slider(0.1..=4.0, settings.zoom, DetailMessage::ZoomChanged)
                     .step(0.01_f32)
                     .style(md_slider_style)
             )
