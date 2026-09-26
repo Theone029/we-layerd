@@ -97,7 +97,6 @@ pub(crate) fn probe_motion(path: &Path) -> Result<MotionProbe, String> {
         .args([
             "-v",
             "error",
-            "-nostdin",
             "-protocol_whitelist",
             "file,pipe",
             "-probesize",
