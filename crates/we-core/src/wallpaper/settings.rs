@@ -30,7 +30,46 @@ pub struct WallpaperSettings {
     #[serde(default)]
     pub position_y: f32,
     #[serde(default)]
+    pub visual_adjustments: VisualAdjustments,
+    #[serde(default)]
     pub user_properties: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct VisualAdjustments {
+    #[serde(default)]
+    pub brightness: f32,
+    #[serde(default = "default_visual_contrast")]
+    pub contrast: f32,
+    #[serde(default = "default_visual_saturation")]
+    pub saturation: f32,
+    #[serde(default)]
+    pub hue_degrees: f32,
+}
+
+impl Default for VisualAdjustments {
+    fn default() -> Self {
+        Self { brightness: 0.0, contrast: 1.0, saturation: 1.0, hue_degrees: 0.0 }
+    }
+}
+
+impl VisualAdjustments {
+    pub fn normalized(self) -> Self {
+        Self {
+            brightness: bounded_or(self.brightness, -1.0, 1.0, 0.0),
+            contrast: bounded_or(self.contrast, 0.0, 2.0, 1.0),
+            saturation: bounded_or(self.saturation, 0.0, 2.0, 1.0),
+            hue_degrees: bounded_or(self.hue_degrees, -180.0, 180.0, 0.0),
+        }
+    }
+
+    pub fn is_neutral(self) -> bool {
+        let value = self.normalized();
+        value.brightness == 0.0
+            && value.contrast == 1.0
+            && value.saturation == 1.0
+            && value.hue_degrees == 0.0
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -111,6 +150,7 @@ impl Default for WallpaperSettings {
             zoom: default_zoom(),
             position_x: 0.0,
             position_y: 0.0,
+            visual_adjustments: VisualAdjustments::default(),
             user_properties: BTreeMap::new(),
         }
     }
@@ -133,6 +173,22 @@ fn default_zoom() -> f32 {
     1.0
 }
 
+fn default_visual_contrast() -> f32 {
+    1.0
+}
+
+fn default_visual_saturation() -> f32 {
+    1.0
+}
+
+fn bounded_or(value: f32, minimum: f32, maximum: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(minimum, maximum)
+    } else {
+        fallback
+    }
+}
+
 pub fn supports_final_output_msaa(wallpaper_type: WallpaperType) -> bool {
     wallpaper_type == WallpaperType::Scene
 }
@@ -149,7 +205,7 @@ pub fn inherited_final_output_msaa(global_samples: u32, wallpaper_type: Wallpape
 mod tests {
     use super::{
         inherited_final_output_msaa, supports_final_output_msaa, RenderResolution,
-        WallpaperFillMode, WallpaperSettings,
+        VisualAdjustments, WallpaperFillMode, WallpaperSettings,
     };
     use crate::wallpaper::WallpaperType;
 
@@ -162,6 +218,8 @@ mod tests {
         assert_eq!(settings.zoom, 1.0);
         assert_eq!(settings.position_x, 0.0);
         assert_eq!(settings.position_y, 0.0);
+        assert_eq!(settings.visual_adjustments, VisualAdjustments::default());
+        assert!(settings.visual_adjustments.is_neutral());
         assert_eq!(settings.fps, 60);
         assert_eq!(settings.msaa_samples, 1);
     }
@@ -173,6 +231,23 @@ mod tests {
         assert_eq!(settings.zoom, 1.0);
         assert_eq!(settings.position_x, 0.0);
         assert_eq!(settings.position_y, 0.0);
+        assert_eq!(settings.visual_adjustments, VisualAdjustments::default());
+    }
+
+    #[test]
+    fn visual_adjustments_bound_invalid_values() {
+        let normalized = VisualAdjustments {
+            brightness: f32::NAN,
+            contrast: 8.0,
+            saturation: -4.0,
+            hue_degrees: 720.0,
+        }
+        .normalized();
+
+        assert_eq!(normalized.brightness, 0.0);
+        assert_eq!(normalized.contrast, 2.0);
+        assert_eq!(normalized.saturation, 0.0);
+        assert_eq!(normalized.hue_degrees, 180.0);
     }
 
     #[test]
@@ -189,6 +264,24 @@ mod tests {
         assert_eq!(decoded.zoom, 1.75);
         assert_eq!(decoded.position_x, -0.25);
         assert_eq!(decoded.position_y, 0.5);
+    }
+
+    #[test]
+    fn visual_adjustments_round_trip() {
+        let settings = WallpaperSettings {
+            visual_adjustments: VisualAdjustments {
+                brightness: 0.2,
+                contrast: 1.4,
+                saturation: 0.6,
+                hue_degrees: -45.0,
+            },
+            ..WallpaperSettings::default()
+        };
+        let encoded = serde_json::to_string(&settings).expect("serialize visual adjustments");
+        let decoded: WallpaperSettings =
+            serde_json::from_str(&encoded).expect("deserialize visual adjustments");
+
+        assert_eq!(decoded.visual_adjustments, settings.visual_adjustments);
     }
 
     #[test]

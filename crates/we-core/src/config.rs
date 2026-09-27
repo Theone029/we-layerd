@@ -857,6 +857,7 @@ mod tests {
                 zoom: 1.75,
                 position_x: -0.25,
                 position_y: 0.5,
+                visual_adjustments: Default::default(),
                 user_properties,
             },
         );

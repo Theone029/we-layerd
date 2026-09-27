@@ -148,6 +148,21 @@ pub(crate) fn update(app: &mut App, message: wallpaper_detail::DetailMessage) ->
             profile.position_x = 0.0;
             profile.position_y = 0.0;
         }
+        DetailMessage::BrightnessChanged(value) => {
+            profile.visual_adjustments.brightness = bounded_visual(value, -1.0, 1.0, 0.0);
+        }
+        DetailMessage::ContrastChanged(value) => {
+            profile.visual_adjustments.contrast = bounded_visual(value, 0.0, 2.0, 1.0);
+        }
+        DetailMessage::SaturationChanged(value) => {
+            profile.visual_adjustments.saturation = bounded_visual(value, 0.0, 2.0, 1.0);
+        }
+        DetailMessage::HueChanged(value) => {
+            profile.visual_adjustments.hue_degrees = bounded_visual(value, -180.0, 180.0, 0.0);
+        }
+        DetailMessage::ResetVisualAdjustments => {
+            profile.visual_adjustments = Default::default();
+        }
         DetailMessage::ResetTransform => reset_transform(profile),
         DetailMessage::PropertyChanged { key, value } => {
             profile.user_properties.insert(key, value);
@@ -263,6 +278,14 @@ fn bounded_position(value: f32) -> f32 {
     }
 }
 
+fn bounded_visual(value: f32, minimum: f32, maximum: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(minimum, maximum)
+    } else {
+        fallback
+    }
+}
+
 fn reset_transform(profile: &mut WallpaperSettings) {
     profile.zoom = 1.0;
     profile.position_x = 0.0;
@@ -317,7 +340,9 @@ pub(crate) fn persist_playback_config(app: &App) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_position, bounded_zoom, dragged_position, reset_transform};
+    use super::{
+        bounded_position, bounded_visual, bounded_zoom, dragged_position, reset_transform,
+    };
     use we_core::wallpaper::settings::{Rotation, WallpaperFillMode, WallpaperSettings};
 
     #[test]
@@ -332,6 +357,14 @@ mod tests {
         assert_eq!(bounded_position(0.25), 0.25);
         assert_eq!(bounded_position(2.0), 1.0);
         assert_eq!(bounded_position(f32::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn visual_controls_use_canonical_bounds() {
+        assert_eq!(bounded_visual(-3.0, -1.0, 1.0, 0.0), -1.0);
+        assert_eq!(bounded_visual(0.25, -1.0, 1.0, 0.0), 0.25);
+        assert_eq!(bounded_visual(3.0, 0.0, 2.0, 1.0), 2.0);
+        assert_eq!(bounded_visual(f32::NAN, 0.0, 2.0, 1.0), 1.0);
     }
 
     #[test]

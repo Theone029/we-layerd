@@ -44,6 +44,11 @@ pub enum DetailMessage {
     PositionXChanged(f32),
     PositionYChanged(f32),
     CenterPosition,
+    BrightnessChanged(f32),
+    ContrastChanged(f32),
+    SaturationChanged(f32),
+    HueChanged(f32),
+    ResetVisualAdjustments,
     PreviewDragStart,
     PreviewPointerMoved { position: iced::Point, width: f32, height: f32 },
     PreviewDragEnd,
@@ -403,8 +408,72 @@ fn actions_view<'a>(
     );
 
     let preview_panel = imported_preview_panel(entry, preview, preview_error, preview_dragging);
+    let visual_adjustments = visual_adjustments_panel(entry, settings);
 
-    column![preview_panel, playback, presentation].spacing(16).into()
+    column![preview_panel, visual_adjustments, playback, presentation].spacing(16).into()
+}
+
+fn visual_adjustments_panel<'a>(
+    entry: &'a WallpaperEntry,
+    settings: &'a WallpaperSettings,
+) -> Element<'a, DetailMessage> {
+    if !entry.imported {
+        return container(text("")).height(0).into();
+    }
+
+    let visual = settings.visual_adjustments.normalized();
+
+    section(
+        "Visual adjustments",
+        column![
+            text(format!("Brightness  {:+.0}%", visual.brightness * 100.0))
+                .size(13)
+                .color(Color::from_rgb8(196, 199, 204)),
+            container(
+                slider(-1.0..=1.0, visual.brightness, DetailMessage::BrightnessChanged)
+                    .step(0.01_f32)
+                    .style(md_slider_style)
+            )
+            .id("detail.visual.brightness"),
+            text(format!("Contrast  {:.0}%", visual.contrast * 100.0))
+                .size(13)
+                .color(Color::from_rgb8(196, 199, 204)),
+            container(
+                slider(0.0..=2.0, visual.contrast, DetailMessage::ContrastChanged)
+                    .step(0.01_f32)
+                    .style(md_slider_style)
+            )
+            .id("detail.visual.contrast"),
+            text(format!("Saturation  {:.0}%", visual.saturation * 100.0))
+                .size(13)
+                .color(Color::from_rgb8(196, 199, 204)),
+            container(
+                slider(0.0..=2.0, visual.saturation, DetailMessage::SaturationChanged)
+                    .step(0.01_f32)
+                    .style(md_slider_style)
+            )
+            .id("detail.visual.saturation"),
+            text(format!("Hue  {:+.0}°", visual.hue_degrees))
+                .size(13)
+                .color(Color::from_rgb8(196, 199, 204)),
+            container(
+                slider(-180.0..=180.0, visual.hue_degrees, DetailMessage::HueChanged)
+                    .step(1.0_f32)
+                    .style(md_slider_style)
+            )
+            .id("detail.visual.hue"),
+            container(
+                button(text("↺  Reset visual adjustments").size(13))
+                    .on_press(DetailMessage::ResetVisualAdjustments)
+                    .style(outlined_button_style),
+            )
+            .id("detail.visual.reset"),
+            text("Non-destructive recipe. M4B1 previews and saves it; runtime derivative application is handled separately in M4B2.")
+                .size(11)
+                .color(Color::from_rgb8(170, 174, 184)),
+        ]
+        .spacing(10),
+    )
 }
 
 fn imported_preview_panel<'a>(

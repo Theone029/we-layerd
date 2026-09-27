@@ -8,7 +8,9 @@ use image_rs::{
 use we_core::{
     config::ScaleMode,
     presentation::compute_presentation_geometry,
-    wallpaper::settings::{RenderResolution, Rotation, WallpaperFillMode, WallpaperSettings},
+    wallpaper::settings::{
+        RenderResolution, Rotation, VisualAdjustments, WallpaperFillMode, WallpaperSettings,
+    },
 };
 
 const PREVIEW_MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
@@ -148,8 +150,9 @@ fn compose(
         preview_destination_extent(geometry.viewport_width, target_width, canvas_width);
     let destination_height =
         preview_destination_extent(geometry.viewport_height, target_height, canvas_height);
-    let composed =
+    let mut composed =
         imageops::resize(&cropped, destination_width, destination_height, FilterType::Triangle);
+    apply_visual_adjustments(&mut composed, settings.visual_adjustments);
 
     let mut canvas = RgbaImage::from_pixel(canvas_width, canvas_height, Rgba([0, 0, 0, 255]));
     let destination_x =
@@ -160,6 +163,64 @@ fn compose(
     imageops::overlay(&mut canvas, &composed, i64::from(destination_x), i64::from(destination_y));
 
     Ok((canvas_width, canvas_height, canvas.into_raw()))
+}
+
+fn apply_visual_adjustments(image: &mut RgbaImage, visual: VisualAdjustments) {
+    let visual = visual.normalized();
+    if visual.is_neutral() {
+        return;
+    }
+
+    let angle = visual.hue_degrees.to_radians();
+    let cos_hue = angle.cos();
+    let sin_hue = angle.sin();
+
+    let matrix = [
+        [
+            0.213 + cos_hue * 0.787 - sin_hue * 0.213,
+            0.715 - cos_hue * 0.715 - sin_hue * 0.715,
+            0.072 - cos_hue * 0.072 + sin_hue * 0.928,
+        ],
+        [
+            0.213 - cos_hue * 0.213 + sin_hue * 0.143,
+            0.715 + cos_hue * 0.285 + sin_hue * 0.140,
+            0.072 - cos_hue * 0.072 - sin_hue * 0.283,
+        ],
+        [
+            0.213 - cos_hue * 0.213 - sin_hue * 0.787,
+            0.715 - cos_hue * 0.715 + sin_hue * 0.715,
+            0.072 + cos_hue * 0.928 + sin_hue * 0.072,
+        ],
+    ];
+
+    for pixel in image.pixels_mut() {
+        let alpha = pixel[3];
+        let mut r = f32::from(pixel[0]) / 255.0;
+        let mut g = f32::from(pixel[1]) / 255.0;
+        let mut b = f32::from(pixel[2]) / 255.0;
+
+        r = (r + visual.brightness).clamp(0.0, 1.0);
+        g = (g + visual.brightness).clamp(0.0, 1.0);
+        b = (b + visual.brightness).clamp(0.0, 1.0);
+
+        r = ((r - 0.5) * visual.contrast + 0.5).clamp(0.0, 1.0);
+        g = ((g - 0.5) * visual.contrast + 0.5).clamp(0.0, 1.0);
+        b = ((b - 0.5) * visual.contrast + 0.5).clamp(0.0, 1.0);
+
+        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        r = (luma + (r - luma) * visual.saturation).clamp(0.0, 1.0);
+        g = (luma + (g - luma) * visual.saturation).clamp(0.0, 1.0);
+        b = (luma + (b - luma) * visual.saturation).clamp(0.0, 1.0);
+
+        let rr = matrix[0][0] * r + matrix[0][1] * g + matrix[0][2] * b;
+        let gg = matrix[1][0] * r + matrix[1][1] * g + matrix[1][2] * b;
+        let bb = matrix[2][0] * r + matrix[2][1] * g + matrix[2][2] * b;
+
+        pixel[0] = (rr.clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[1] = (gg.clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[2] = (bb.clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[3] = alpha;
+    }
 }
 
 fn preview_canvas_extent(
@@ -222,16 +283,46 @@ fn normalized_destination_offset(canvas: u32, destination: u32, position: f32) -
 #[cfg(test)]
 mod tests {
     use image_rs::{Rgba, RgbaImage};
-    use we_core::wallpaper::settings::{RenderResolution, WallpaperFillMode, WallpaperSettings};
+    use we_core::wallpaper::settings::{
+        RenderResolution, VisualAdjustments, WallpaperFillMode, WallpaperSettings,
+    };
 
     use super::{
-        compose, DetailPreviewSource, DRAG_PREVIEW_CANVAS_MAX_HEIGHT,
+        apply_visual_adjustments, compose, DetailPreviewSource, DRAG_PREVIEW_CANVAS_MAX_HEIGHT,
         DRAG_PREVIEW_CANVAS_MAX_WIDTH, PREVIEW_CANVAS_MAX_HEIGHT, PREVIEW_CANVAS_MAX_WIDTH,
     };
 
     fn source() -> DetailPreviewSource {
         let image = RgbaImage::from_pixel(160, 90, Rgba([200, 20, 20, 255]));
         DetailPreviewSource { width: image.width(), height: image.height(), rgba: image.into_raw() }
+    }
+
+    #[test]
+    fn neutral_visual_adjustments_preserve_pixels() {
+        let mut image = RgbaImage::from_pixel(1, 1, Rgba([64, 128, 192, 77]));
+        let before = image.clone();
+
+        apply_visual_adjustments(&mut image, VisualAdjustments::default());
+
+        assert_eq!(image, before);
+    }
+
+    #[test]
+    fn visual_adjustments_change_rgb_without_changing_alpha() {
+        let mut image = RgbaImage::from_pixel(1, 1, Rgba([64, 128, 192, 77]));
+
+        apply_visual_adjustments(
+            &mut image,
+            VisualAdjustments {
+                brightness: 0.1,
+                contrast: 1.2,
+                saturation: 1.5,
+                hue_degrees: 30.0,
+            },
+        );
+
+        assert_ne!(&image.get_pixel(0, 0).0[..3], &[64, 128, 192]);
+        assert_eq!(image.get_pixel(0, 0)[3], 77);
     }
 
     #[test]
