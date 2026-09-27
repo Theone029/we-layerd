@@ -165,7 +165,7 @@ fn compose(
     Ok((canvas_width, canvas_height, canvas.into_raw()))
 }
 
-fn apply_visual_adjustments(image: &mut RgbaImage, visual: VisualAdjustments) {
+pub(crate) fn apply_visual_adjustments(image: &mut RgbaImage, visual: VisualAdjustments) {
     let visual = visual.normalized();
     if visual.is_neutral() {
         return;

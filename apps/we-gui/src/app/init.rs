@@ -108,6 +108,7 @@ pub(crate) fn initialize() -> (App, Task<Message>) {
             detail_preview_error: None,
             detail_drag_active: false,
             detail_drag_last: None,
+            visual_materialize_busy: false,
 
             still_editor: crate::domain::still_editor::StillEditorState::default(),
             still_editor_draft: None,

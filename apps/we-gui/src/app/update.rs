@@ -212,6 +212,29 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             refresh_visible_gif_previews(app)
         }
         Message::Detail(message) => super::detail_update::update(app, message),
+        Message::VisualDerivativePrepared { wallpaper_id, result } => {
+            app.visual_materialize_busy = false;
+            if app.selected_id.as_deref() != Some(wallpaper_id.as_str()) {
+                return Task::none();
+            }
+
+            match result {
+                Ok(outcome) => {
+                    let start = if outcome.changed && runtime::daemon_is_running() {
+                        PlaybackStart::Restart
+                    } else {
+                        PlaybackStart::SwitchOrStart
+                    };
+                    play_selected(app, start)
+                }
+                Err(error) => {
+                    app.runtime_status = RuntimeStatus::Unavailable(format!(
+                        "visual derivative materialization failed: {error}"
+                    ));
+                    Task::none()
+                }
+            }
+        }
         Message::PlayPressed => play_selected(app, PlaybackStart::SwitchOrStart),
         Message::StopPressed => {
             let stopped = app.shutdown_runtime();
@@ -1799,19 +1822,22 @@ fn play_selected(app: &mut App, start: PlaybackStart) -> Task<Message> {
         return Task::none();
     }
 
-    if multi_output {
-        return start_or_reconfigure_multi_output(app);
-    }
-
-    if let Err(error) = runtime::reap(&mut app.runtime_child) {
-        eprintln!("failed to query daemon child status: {error}");
-    }
-
     let start = effective_playback_start(
         start,
         std::env::var_os(we_core::install_layout::RENDERER_LIBRARY_OVERRIDE_ENV).is_some(),
         app.runtime_child.is_some(),
     );
+
+    if multi_output {
+        return start_or_reconfigure_multi_output_with_restart(
+            app,
+            start == PlaybackStart::Restart,
+        );
+    }
+
+    if let Err(error) = runtime::reap(&mut app.runtime_child) {
+        eprintln!("failed to query daemon child status: {error}");
+    }
 
     if start == PlaybackStart::SwitchOrStart && runtime::try_switch(&app.config_path) {
         app.runtime_status = RuntimeStatus::SwitchedDaemon;
@@ -1877,24 +1903,36 @@ fn bind_selected_wallpaper_outputs(app: &mut App) -> Result<(), String> {
 }
 
 fn start_or_reconfigure_multi_output(app: &mut App) -> Task<Message> {
+    start_or_reconfigure_multi_output_with_restart(app, false)
+}
+
+fn start_or_reconfigure_multi_output_with_restart(
+    app: &mut App,
+    force_restart: bool,
+) -> Task<Message> {
     if let Err(error) = runtime::reap(&mut app.runtime_child) {
         eprintln!("failed to query daemon child status: {error}");
     }
     if runtime::daemon_is_running() {
-        let forced_renderer_library =
-            std::env::var_os(we_core::install_layout::RENDERER_LIBRARY_OVERRIDE_ENV).is_some();
-        let must_restart_unowned = forced_renderer_library && app.runtime_child.is_none();
-        let supports_multi_output = match runtime::fetch_status_sync() {
-            Ok(runtime::DaemonStatus::Running(status)) => {
-                daemon_status_supports_multi_output(&status)
+        if !force_restart {
+            let forced_renderer_library =
+                std::env::var_os(we_core::install_layout::RENDERER_LIBRARY_OVERRIDE_ENV).is_some();
+            let must_restart_unowned = forced_renderer_library && app.runtime_child.is_none();
+            let supports_multi_output = match runtime::fetch_status_sync() {
+                Ok(runtime::DaemonStatus::Running(status)) => {
+                    daemon_status_supports_multi_output(&status)
+                }
+                _ => false,
+            };
+            if supports_multi_output
+                && !must_restart_unowned
+                && runtime::try_switch(&app.config_path)
+            {
+                app.playback_running = true;
+                app.playback_paused = false;
+                app.runtime_status = RuntimeStatus::SwitchedDaemon;
+                return Task::perform(runtime::fetch_status(), Message::StatusLoaded);
             }
-            _ => false,
-        };
-        if supports_multi_output && !must_restart_unowned && runtime::try_switch(&app.config_path) {
-            app.playback_running = true;
-            app.playback_paused = false;
-            app.runtime_status = RuntimeStatus::SwitchedDaemon;
-            return Task::perform(runtime::fetch_status(), Message::StatusLoaded);
         }
         return match runtime::restart(&app.config_path, &mut app.runtime_child) {
             Ok(child) => {

@@ -49,6 +49,7 @@ pub(crate) struct App {
     pub detail_preview_error: Option<String>,
     pub detail_drag_active: bool,
     pub detail_drag_last: Option<iced::Point>,
+    pub visual_materialize_busy: bool,
     pub still_editor: StillEditorState,
     pub still_editor_draft: Option<StillImageDraft>,
     pub still_editor_error: Option<String>,
@@ -238,6 +239,10 @@ pub(crate) enum Message {
         result: Result<(), String>,
     },
     Detail(DetailMessage),
+    VisualDerivativePrepared {
+        wallpaper_id: String,
+        result: Result<crate::services::visual_materialize::MaterializeOutcome, String>,
+    },
     StatusLoaded(Result<DaemonStatus, String>),
     StatusTick,
     PlaylistsPressed,

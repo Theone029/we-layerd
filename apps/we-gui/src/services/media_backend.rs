@@ -5,7 +5,7 @@ use std::{
 };
 
 use serde::Deserialize;
-use we_core::ingress::MEDIA_INGRESS_MAX_PAYLOAD_BYTES;
+use we_core::{ingress::MEDIA_INGRESS_MAX_PAYLOAD_BYTES, wallpaper::settings::VisualAdjustments};
 
 const FFMPEG_PATH: &str = "/usr/bin/ffmpeg";
 const FFPROBE_PATH: &str = "/usr/bin/ffprobe";
@@ -245,6 +245,124 @@ pub(crate) fn transcode_gif_to_webm(input: &Path, output: &Path) -> Result<(), S
     Ok(())
 }
 
+pub(crate) fn materialize_motion_visual(
+    input: &Path,
+    output: &Path,
+    visual: VisualAdjustments,
+) -> Result<(), String> {
+    validate_source(input)?;
+    if output.exists() {
+        return Err(format!("refusing to overwrite media derivative {}", output.display()));
+    }
+
+    let probe = probe_motion(input)?;
+    let expected_extension = probe.kind.rendered_extension();
+    let actual_extension = output
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if actual_extension != expected_extension {
+        return Err(format!(
+            "visual derivative extension '.{actual_extension}' does not match expected '.{expected_extension}'"
+        ));
+    }
+
+    let visual = visual.normalized();
+    if visual.is_neutral() {
+        if probe.kind.needs_transcode() {
+            return transcode_gif_to_webm(input, output);
+        }
+
+        let expected = fs::metadata(input)
+            .map_err(|error| format!("cannot inspect neutral media source: {error}"))?
+            .len();
+        let copied = fs::copy(input, output)
+            .map_err(|error| format!("cannot restore neutral media derivative: {error}"))?;
+        if copied != expected {
+            let _ = fs::remove_file(output);
+            return Err(format!(
+                "neutral media derivative length changed: expected {expected}, copied {copied}"
+            ));
+        }
+        return validate_motion_derivative(output);
+    }
+
+    let filter = visual_filter(visual);
+    let mut command = Command::new(FFMPEG_PATH);
+    command
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-n",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-probesize",
+            "5242880",
+            "-analyzeduration",
+            "5000000",
+            "-i",
+        ])
+        .arg(input)
+        .args(["-map", "0:v:0", "-map", "0:a?", "-vf"])
+        .arg(filter)
+        .args(["-c:a", "copy"]);
+
+    match probe.kind {
+        MotionKind::Mp4 => {
+            command.args(["-c:v", "mpeg4", "-q:v", "3", "-movflags", "+faststart"]);
+        }
+        MotionKind::Gif | MotionKind::Webm | MotionKind::Matroska => {
+            command.args([
+                "-c:v",
+                "libvpx-vp9",
+                "-deadline",
+                "realtime",
+                "-cpu-used",
+                "8",
+                "-row-mt",
+                "1",
+            ]);
+        }
+    }
+
+    command.arg("-fs").arg(MEDIA_INGRESS_MAX_PAYLOAD_BYTES.to_string()).arg(output);
+
+    let result =
+        command.output().map_err(|error| format!("failed to execute {FFMPEG_PATH}: {error}"))?;
+
+    if !result.status.success() {
+        let _ = fs::remove_file(output);
+        return Err(format!("ffmpeg visual derivative failed: {}", bounded_error(&result)));
+    }
+
+    validate_motion_derivative(output)
+}
+
+fn visual_filter(visual: VisualAdjustments) -> String {
+    let value = visual.normalized();
+    format!(
+        "eq=brightness={:.6}:contrast={:.6}:saturation={:.6},hue=h={:.6},pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p",
+        value.brightness, value.contrast, value.saturation, value.hue_degrees
+    )
+}
+
+fn validate_motion_derivative(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot inspect media derivative {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
+        let _ = fs::remove_file(path);
+        return Err("ffmpeg produced an invalid media derivative".to_string());
+    }
+    if metadata.len() > MEDIA_INGRESS_MAX_PAYLOAD_BYTES {
+        let _ = fs::remove_file(path);
+        return Err("media derivative exceeded the private transport bound".to_string());
+    }
+    Ok(())
+}
+
 fn validate_source(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("cannot inspect media {}: {error}", path.display()))?;
@@ -340,12 +458,29 @@ fn bounded_error(output: &Output) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_probe_json, MotionKind, FFMPEG_PATH, FFPROBE_PATH};
+    use super::{parse_probe_json, visual_filter, MotionKind, FFMPEG_PATH, FFPROBE_PATH};
+    use we_core::wallpaper::settings::VisualAdjustments;
 
     #[test]
     fn adapter_uses_absolute_pinned_executables() {
         assert_eq!(FFMPEG_PATH, "/usr/bin/ffmpeg");
         assert_eq!(FFPROBE_PATH, "/usr/bin/ffprobe");
+    }
+
+    #[test]
+    fn visual_filter_uses_normalized_recipe_and_even_yuv420_output() {
+        let filter = visual_filter(VisualAdjustments {
+            brightness: 0.25,
+            contrast: 1.4,
+            saturation: 0.6,
+            hue_degrees: 35.0,
+        });
+        assert!(filter.contains("brightness=0.250000"));
+        assert!(filter.contains("contrast=1.400000"));
+        assert!(filter.contains("saturation=0.600000"));
+        assert!(filter.contains("hue=h=35.000000"));
+        assert!(filter.contains("pad=ceil(iw/2)*2:ceil(ih/2)*2"));
+        assert!(filter.ends_with("format=yuv420p"));
     }
 
     #[test]

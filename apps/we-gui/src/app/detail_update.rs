@@ -6,7 +6,7 @@ use we_core::wallpaper::{
 
 use crate::{
     domain::runtime_status::RuntimeStatus,
-    services::{config, detail_preview, runtime},
+    services::{config, detail_preview, runtime, visual_materialize},
     ui::sidebar::detail as wallpaper_detail,
 };
 
@@ -61,7 +61,33 @@ pub(crate) fn update(app: &mut App, message: wallpaper_detail::DetailMessage) ->
     };
 
     if matches!(message, DetailMessage::Apply) {
-        return super::update::update(app, Message::PlayPressed);
+        if app.visual_materialize_busy {
+            return Task::none();
+        }
+
+        let Some(selected_id) = app.selected_id.clone() else {
+            return super::update::update(app, Message::PlayPressed);
+        };
+        let Some(entry) = app.entries.iter().find(|entry| entry.id == selected_id).cloned() else {
+            return super::update::update(app, Message::PlayPressed);
+        };
+        if !entry.imported {
+            return super::update::update(app, Message::PlayPressed);
+        }
+
+        if let Err(error) = persist_wallpaper_profiles(app) {
+            app.runtime_status = RuntimeStatus::ConfigSaveFailed(error.clone());
+            eprintln!("failed to save visual recipe before apply: {error}");
+            return Task::none();
+        }
+
+        let settings =
+            app.launch_settings.wallpapers.get(&selected_id).cloned().unwrap_or_default();
+        app.visual_materialize_busy = true;
+
+        return Task::perform(visual_materialize::materialize(entry, settings), move |result| {
+            Message::VisualDerivativePrepared { wallpaper_id: selected_id, result }
+        });
     }
     match message {
         DetailMessage::SelectTab(tab) => {
