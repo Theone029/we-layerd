@@ -220,8 +220,8 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 
             match result {
                 Ok(outcome) => {
-                    let start = if outcome.changed && runtime::daemon_is_running() {
-                        PlaybackStart::Restart
+                    let start = if outcome.changed {
+                        PlaybackStart::HotReload
                     } else {
                         PlaybackStart::SwitchOrStart
                     };
@@ -1792,6 +1792,7 @@ fn playlist_runtime_action(app: &mut App, action: &str) -> Task<Message> {
 enum PlaybackStart {
     SwitchOrStart,
     Restart,
+    HotReload,
 }
 
 fn play_selected(app: &mut App, start: PlaybackStart) -> Task<Message> {
@@ -1822,6 +1823,28 @@ fn play_selected(app: &mut App, start: PlaybackStart) -> Task<Message> {
         return Task::none();
     }
 
+    // A changed imported-media derivative lives at the same canonical source
+    // path. Under the hardened deployment the daemon is system-owned, so
+    // refresh that path in-process rather than trying to stop and respawn the
+    // daemon from the GUI lane.
+    if start == PlaybackStart::HotReload && runtime::daemon_is_running() {
+        if runtime::try_switch(&app.config_path) {
+            app.runtime_status = RuntimeStatus::SwitchedDaemon;
+            if multi_output {
+                app.playback_running = true;
+                app.playback_paused = false;
+                return Task::perform(runtime::fetch_status(), Message::StatusLoaded);
+            }
+            mark_selected_wallpaper_running(app);
+            return Task::none();
+        }
+
+        app.runtime_status = RuntimeStatus::Unavailable(
+            "visual derivative was saved but the hardened daemon rejected hot reload".to_string(),
+        );
+        return Task::none();
+    }
+
     let start = effective_playback_start(
         start,
         std::env::var_os(we_core::install_layout::RENDERER_LIBRARY_OVERRIDE_ENV).is_some(),
@@ -1839,14 +1862,16 @@ fn play_selected(app: &mut App, start: PlaybackStart) -> Task<Message> {
         eprintln!("failed to query daemon child status: {error}");
     }
 
-    if start == PlaybackStart::SwitchOrStart && runtime::try_switch(&app.config_path) {
+    if matches!(start, PlaybackStart::SwitchOrStart | PlaybackStart::HotReload)
+        && runtime::try_switch(&app.config_path)
+    {
         app.runtime_status = RuntimeStatus::SwitchedDaemon;
         mark_selected_wallpaper_running(app);
         return Task::none();
     }
 
     let spawn = match start {
-        PlaybackStart::SwitchOrStart => {
+        PlaybackStart::SwitchOrStart | PlaybackStart::HotReload => {
             runtime::start(&app.config_path).map(Some).map_err(|error| error.to_string())
         }
         PlaybackStart::Restart => runtime::restart(&app.config_path, &mut app.runtime_child),
@@ -2095,6 +2120,18 @@ mod tests {
         assert_eq!(
             effective_playback_start(PlaybackStart::SwitchOrStart, false, false),
             PlaybackStart::SwitchOrStart,
+        );
+    }
+
+    #[test]
+    fn visual_derivative_hot_reload_is_never_promoted_to_gui_owned_restart() {
+        assert_eq!(
+            effective_playback_start(PlaybackStart::HotReload, true, false),
+            PlaybackStart::HotReload,
+        );
+        assert_eq!(
+            effective_playback_start(PlaybackStart::HotReload, false, false),
+            PlaybackStart::HotReload,
         );
     }
 
