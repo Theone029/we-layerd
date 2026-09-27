@@ -16,6 +16,8 @@ const PREVIEW_MAX_SOURCE_DIMENSION: u32 = 4_096;
 const PREVIEW_MAX_ALLOC: u64 = 96 * 1024 * 1024;
 const PREVIEW_CANVAS_MAX_WIDTH: u32 = 480;
 const PREVIEW_CANVAS_MAX_HEIGHT: u32 = 270;
+const DRAG_PREVIEW_CANVAS_MAX_WIDTH: u32 = 240;
+const DRAG_PREVIEW_CANVAS_MAX_HEIGHT: u32 = 135;
 const DEFAULT_TARGET_WIDTH: u32 = 1920;
 const DEFAULT_TARGET_HEIGHT: u32 = 1080;
 
@@ -61,13 +63,36 @@ pub(crate) fn render(
     source: &DetailPreviewSource,
     settings: &WallpaperSettings,
 ) -> Result<image::Handle, String> {
-    let (width, height, rgba) = compose(source, settings)?;
+    render_with_extent(source, settings, PREVIEW_CANVAS_MAX_WIDTH, PREVIEW_CANVAS_MAX_HEIGHT)
+}
+
+pub(crate) fn render_drag(
+    source: &DetailPreviewSource,
+    settings: &WallpaperSettings,
+) -> Result<image::Handle, String> {
+    render_with_extent(
+        source,
+        settings,
+        DRAG_PREVIEW_CANVAS_MAX_WIDTH,
+        DRAG_PREVIEW_CANVAS_MAX_HEIGHT,
+    )
+}
+
+fn render_with_extent(
+    source: &DetailPreviewSource,
+    settings: &WallpaperSettings,
+    max_width: u32,
+    max_height: u32,
+) -> Result<image::Handle, String> {
+    let (width, height, rgba) = compose(source, settings, max_width, max_height)?;
     Ok(image::Handle::from_rgba(width, height, rgba))
 }
 
 fn compose(
     source: &DetailPreviewSource,
     settings: &WallpaperSettings,
+    max_width: u32,
+    max_height: u32,
 ) -> Result<(u32, u32, Vec<u8>), String> {
     let source_image = RgbaImage::from_raw(source.width, source.height, source.rgba.clone())
         .ok_or_else(|| "cached imported preview pixels are invalid".to_string())?;
@@ -101,7 +126,8 @@ fn compose(
         settings.position_y as f64,
     );
 
-    let (canvas_width, canvas_height) = preview_canvas_extent(target_width, target_height);
+    let (canvas_width, canvas_height) =
+        preview_canvas_extent(target_width, target_height, max_width, max_height);
 
     let (crop_x, crop_width) = match geometry.viewport_source {
         Some(viewport) => {
@@ -136,16 +162,21 @@ fn compose(
     Ok((canvas_width, canvas_height, canvas.into_raw()))
 }
 
-fn preview_canvas_extent(target_width: u32, target_height: u32) -> (u32, u32) {
+fn preview_canvas_extent(
+    target_width: u32,
+    target_height: u32,
+    max_width: u32,
+    max_height: u32,
+) -> (u32, u32) {
     let target_width = target_width.max(1);
     let target_height = target_height.max(1);
-    let scale = (PREVIEW_CANVAS_MAX_WIDTH as f64 / target_width as f64)
-        .min(PREVIEW_CANVAS_MAX_HEIGHT as f64 / target_height as f64);
+    let max_width = max_width.max(1);
+    let max_height = max_height.max(1);
+    let scale =
+        (max_width as f64 / target_width as f64).min(max_height as f64 / target_height as f64);
 
-    let width =
-        (target_width as f64 * scale).round().clamp(1.0, PREVIEW_CANVAS_MAX_WIDTH as f64) as u32;
-    let height =
-        (target_height as f64 * scale).round().clamp(1.0, PREVIEW_CANVAS_MAX_HEIGHT as f64) as u32;
+    let width = (target_width as f64 * scale).round().clamp(1.0, max_width as f64) as u32;
+    let height = (target_height as f64 * scale).round().clamp(1.0, max_height as f64) as u32;
 
     (width, height)
 }
@@ -193,7 +224,10 @@ mod tests {
     use image_rs::{Rgba, RgbaImage};
     use we_core::wallpaper::settings::{RenderResolution, WallpaperFillMode, WallpaperSettings};
 
-    use super::{compose, DetailPreviewSource};
+    use super::{
+        compose, DetailPreviewSource, DRAG_PREVIEW_CANVAS_MAX_HEIGHT,
+        DRAG_PREVIEW_CANVAS_MAX_WIDTH, PREVIEW_CANVAS_MAX_HEIGHT, PREVIEW_CANVAS_MAX_WIDTH,
+    };
 
     fn source() -> DetailPreviewSource {
         let image = RgbaImage::from_pixel(160, 90, Rgba([200, 20, 20, 255]));
@@ -210,12 +244,40 @@ mod tests {
             ..WallpaperSettings::default()
         };
 
-        let centered = compose(&source, &settings).expect("centered preview");
+        let centered =
+            compose(&source, &settings, PREVIEW_CANVAS_MAX_WIDTH, PREVIEW_CANVAS_MAX_HEIGHT)
+                .expect("centered preview");
         settings.position_y = 1.0;
-        let shifted = compose(&source, &settings).expect("shifted preview");
+        let shifted =
+            compose(&source, &settings, PREVIEW_CANVAS_MAX_WIDTH, PREVIEW_CANVAS_MAX_HEIGHT)
+                .expect("shifted preview");
 
         assert_eq!((centered.0, centered.1), (152, 270));
         assert_ne!(centered.2, shifted.2);
+    }
+
+    #[test]
+    fn drag_preview_uses_lower_resolution_than_resting_preview() {
+        let source = source();
+        let settings = WallpaperSettings {
+            fill_mode: WallpaperFillMode::Fit,
+            render_resolution: RenderResolution::Fixed { width: 1920, height: 1080 },
+            ..WallpaperSettings::default()
+        };
+
+        let full = compose(&source, &settings, PREVIEW_CANVAS_MAX_WIDTH, PREVIEW_CANVAS_MAX_HEIGHT)
+            .expect("full preview");
+        let drag = compose(
+            &source,
+            &settings,
+            DRAG_PREVIEW_CANVAS_MAX_WIDTH,
+            DRAG_PREVIEW_CANVAS_MAX_HEIGHT,
+        )
+        .expect("drag preview");
+
+        assert_eq!((full.0, full.1), (480, 270));
+        assert_eq!((drag.0, drag.1), (240, 135));
+        assert!(drag.2.len() < full.2.len());
     }
 
     #[test]
@@ -229,7 +291,9 @@ mod tests {
             ..WallpaperSettings::default()
         };
 
-        let rendered = compose(&source, &settings).expect("bounded preview");
+        let rendered =
+            compose(&source, &settings, PREVIEW_CANVAS_MAX_WIDTH, PREVIEW_CANVAS_MAX_HEIGHT)
+                .expect("bounded preview");
         assert!(!rendered.2.is_empty());
     }
 }

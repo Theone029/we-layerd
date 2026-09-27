@@ -18,13 +18,14 @@ pub(crate) fn update(app: &mut App, message: wallpaper_detail::DetailMessage) ->
     let message = match message {
         DetailMessage::PreviewDragStart => {
             app.detail_drag_active = true;
+            app.detail_drag_last = None;
             return Task::none();
         }
         DetailMessage::PreviewPointerMoved { position, width, height } => {
-            let previous = app.detail_drag_last.replace(position);
             if !app.detail_drag_active {
                 return Task::none();
             }
+            let previous = app.detail_drag_last.replace(position);
             let Some(previous) = previous else {
                 return Task::none();
             };
@@ -40,7 +41,7 @@ pub(crate) fn update(app: &mut App, message: wallpaper_detail::DetailMessage) ->
                 dragged_position(profile.position_x, position.x - previous.x, width);
             profile.position_y =
                 dragged_position(profile.position_y, position.y - previous.y, height);
-            refresh_detail_preview(app);
+            refresh_detail_drag_preview(app);
             return Task::none();
         }
         DetailMessage::PreviewDragEnd => {
@@ -48,6 +49,7 @@ pub(crate) fn update(app: &mut App, message: wallpaper_detail::DetailMessage) ->
             app.detail_drag_active = false;
             app.detail_drag_last = None;
             if was_dragging {
+                refresh_detail_preview(app);
                 if let Err(error) = persist_wallpaper_profiles(app) {
                     app.runtime_status = RuntimeStatus::ConfigSaveFailed(error.clone());
                     eprintln!("failed to save dragged wallpaper position: {error}");
@@ -201,6 +203,14 @@ pub(crate) fn load_detail_preview_for_selection(
 }
 
 fn refresh_detail_preview(app: &mut App) {
+    refresh_detail_preview_with(app, false);
+}
+
+fn refresh_detail_drag_preview(app: &mut App) {
+    refresh_detail_preview_with(app, true);
+}
+
+fn refresh_detail_preview_with(app: &mut App, lightweight: bool) {
     let Some(source) = app.detail_preview_source.as_ref() else {
         return;
     };
@@ -211,7 +221,13 @@ fn refresh_detail_preview(app: &mut App) {
         return;
     };
 
-    match detail_preview::render(source, settings) {
+    let rendered = if lightweight {
+        detail_preview::render_drag(source, settings)
+    } else {
+        detail_preview::render(source, settings)
+    };
+
+    match rendered {
         Ok(handle) => {
             app.detail_preview = Some(handle);
             app.detail_preview_error = None;
