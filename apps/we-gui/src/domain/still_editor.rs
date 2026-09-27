@@ -28,7 +28,7 @@ impl Default for StillEditorState {
             source_dimensions: None,
             target_width: DEFAULT_TARGET_WIDTH.to_string(),
             target_height: DEFAULT_TARGET_HEIGHT.to_string(),
-            scale_mode: ScaleMode::Cover,
+            scale_mode: ScaleMode::Fit,
             zoom: 1.0,
             position_x: 0.0,
             position_y: 0.0,
@@ -102,7 +102,7 @@ mod tests {
         let state = StillEditorState::default();
 
         assert_eq!(state.target_extent(), (1920, 1080));
-        assert_eq!(state.scale_mode, ScaleMode::Cover);
+        assert_eq!(state.scale_mode, ScaleMode::Fit);
         assert_eq!(state.zoom, 1.0);
         assert_eq!(state.position_x, 0.0);
         assert_eq!(state.position_y, 0.0);

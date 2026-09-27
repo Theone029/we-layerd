@@ -24,6 +24,7 @@ pub(crate) enum StillEditorMessage {
     ZoomChanged(f32),
     PositionXChanged(f32),
     PositionYChanged(f32),
+    CenterPosition,
     RotationChanged(Rotation),
     ResetTransform,
 }
@@ -114,9 +115,15 @@ pub(crate) fn view<'a>(
             )
             .padding([12, 10])
             .width(Fill),
-            button(text(format!("↺  {}", language.text(Text::ResetTransform))).size(13))
-                .on_press(StillEditorMessage::ResetTransform)
-                .padding([10, 14]),
+            row![
+                button(text("⌾  Center").size(13))
+                    .on_press(StillEditorMessage::CenterPosition)
+                    .padding([10, 14]),
+                button(text(format!("↺  {}", language.text(Text::ResetTransform))).size(13))
+                    .on_press(StillEditorMessage::ResetTransform)
+                    .padding([10, 14]),
+            ]
+            .spacing(8),
         ]
         .spacing(10),
     );

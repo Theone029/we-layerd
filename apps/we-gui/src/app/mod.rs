@@ -128,6 +128,11 @@ mod tests {
             show_settings: true,
             sidebar: None,
             detail_tab: DetailTab::Actions,
+            detail_preview_source: None,
+            detail_preview: None,
+            detail_preview_error: None,
+            detail_drag_active: false,
+            detail_drag_last: None,
 
             still_editor: crate::domain::still_editor::StillEditorState::default(),
             still_editor_draft: None,
@@ -243,6 +248,11 @@ mod tests {
             show_settings: false,
             sidebar: None,
             detail_tab: DetailTab::Actions,
+            detail_preview_source: None,
+            detail_preview: None,
+            detail_preview_error: None,
+            detail_drag_active: false,
+            detail_drag_last: None,
 
             still_editor: crate::domain::still_editor::StillEditorState::default(),
             still_editor_draft: None,

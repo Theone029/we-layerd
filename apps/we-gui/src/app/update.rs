@@ -34,7 +34,10 @@ use crate::{
 };
 
 use super::{
-    detail_update::{persist_playback_config, persist_wallpaper_profiles, set_resolution_inputs},
+    detail_update::{
+        load_detail_preview_for_selection, persist_playback_config, persist_wallpaper_profiles,
+        set_resolution_inputs,
+    },
     state::OutputRuntimeState,
     App, Message,
 };
@@ -1197,6 +1200,7 @@ fn select_wallpaper(app: &mut App, index: usize, show_details: bool) -> bool {
         })
         .clone();
     set_resolution_inputs(app, &profile);
+    load_detail_preview_for_selection(app, &entry, &profile);
     sync_selected_outputs_for_wallpaper(app);
     if let Err(error) = persist_wallpaper_profiles(app) {
         app.runtime_status = RuntimeStatus::ConfigSaveFailed(error.clone());

@@ -102,6 +102,12 @@ pub(crate) fn update(app: &mut App, message: StillEditorMessage) -> Task<Message
             refresh_preview(app);
         }
 
+        StillEditorMessage::CenterPosition => {
+            app.still_editor.position_x = 0.0;
+            app.still_editor.position_y = 0.0;
+            refresh_preview(app);
+        }
+
         StillEditorMessage::RotationChanged(value) => {
             app.still_editor.rotation = value;
             refresh_preview(app);

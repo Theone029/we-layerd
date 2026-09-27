@@ -6,8 +6,10 @@ use crate::{
 };
 use iced::{
     alignment::Horizontal,
+    mouse,
     widget::{
-        button, checkbox, column, container, pick_list, row, scrollable, slider, text, text_input,
+        button, checkbox, column, container, image, mouse_area, pick_list, responsive, row,
+        scrollable, slider, text, text_input,
     },
     Background, Border, Color, Element, Fill, Theme,
 };
@@ -41,6 +43,10 @@ pub enum DetailMessage {
     ZoomChanged(f32),
     PositionXChanged(f32),
     PositionYChanged(f32),
+    CenterPosition,
+    PreviewDragStart,
+    PreviewPointerMoved { position: iced::Point, width: f32, height: f32 },
+    PreviewDragEnd,
     ResetTransform,
     PropertyChanged { key: String, value: Value },
     PickPath { key: String, directory: bool },
@@ -67,6 +73,9 @@ pub struct DetailViewState<'a> {
     pub resolution_width: &'a str,
     pub resolution_height: &'a str,
     pub active_tab: DetailTab,
+    pub preview: Option<&'a image::Handle>,
+    pub preview_error: Option<&'a str>,
+    pub preview_dragging: bool,
     pub is_running: bool,
     pub is_paused: bool,
     pub outputs: &'a [String],
@@ -82,6 +91,9 @@ pub fn view(state: DetailViewState<'_>) -> Element<'_, DetailMessage> {
         resolution_width,
         resolution_height,
         active_tab,
+        preview,
+        preview_error,
+        preview_dragging,
         is_running,
         is_paused,
         outputs,
@@ -106,8 +118,11 @@ pub fn view(state: DetailViewState<'_>) -> Element<'_, DetailMessage> {
 
     let body = match active_tab {
         DetailTab::Actions => actions_view(
+            entry,
             settings,
-            entry.ty,
+            preview,
+            preview_error,
+            preview_dragging,
             resolution_width,
             resolution_height,
             outputs,
@@ -181,8 +196,11 @@ pub fn view(state: DetailViewState<'_>) -> Element<'_, DetailMessage> {
 }
 
 fn actions_view<'a>(
+    entry: &'a WallpaperEntry,
     settings: &'a WallpaperSettings,
-    wallpaper_type: WallpaperType,
+    preview: Option<&'a image::Handle>,
+    preview_error: Option<&'a str>,
+    preview_dragging: bool,
     resolution_width: &'a str,
     resolution_height: &'a str,
     outputs: &'a [String],
@@ -251,7 +269,7 @@ fn actions_view<'a>(
         ]
         .spacing(10),
     );
-    let msaa_control: Element<'a, DetailMessage> = if supports_final_output_msaa(wallpaper_type) {
+    let msaa_control: Element<'a, DetailMessage> = if supports_final_output_msaa(entry.ty) {
         container(
             pick_list(msaa_options, selected_msaa, |option| {
                 DetailMessage::MsaaChanged(option.value)
@@ -363,19 +381,96 @@ fn actions_view<'a>(
                 .menu_style(md_menu_style),
             )
             .id("detail.rotation"),
-            container(
-                button(text(format!("↺  {}", language.text(Text::ResetTransform))).size(13))
-                    .on_press(DetailMessage::ResetTransform)
-                    .style(outlined_button_style),
-            )
-            .id("detail.transform.reset"),
+            row![
+                container(
+                    button(text("⌾  Center").size(13))
+                        .on_press(DetailMessage::CenterPosition)
+                        .style(outlined_button_style),
+                )
+                .id("detail.transform.center"),
+                container(
+                    button(text(format!("↺  {}", language.text(Text::ResetTransform))).size(13))
+                        .on_press(DetailMessage::ResetTransform)
+                        .style(outlined_button_style),
+                )
+                .id("detail.transform.reset"),
+            ]
+            .spacing(8),
             field_label(language.text(Text::FinalOutputMsaa)),
             msaa_control,
         ]
         .spacing(10),
     );
 
-    column![playback, presentation].spacing(16).into()
+    let preview_panel = imported_preview_panel(entry, preview, preview_error, preview_dragging);
+
+    column![preview_panel, playback, presentation].spacing(16).into()
+}
+
+fn imported_preview_panel<'a>(
+    entry: &'a WallpaperEntry,
+    preview: Option<&'a image::Handle>,
+    preview_error: Option<&'a str>,
+    dragging: bool,
+) -> Element<'a, DetailMessage> {
+    if !entry.imported {
+        return container(text("")).height(0).into();
+    }
+
+    let handle = preview.cloned();
+    let interaction =
+        if dragging { mouse::Interaction::Grabbing } else { mouse::Interaction::Grab };
+
+    let visual = responsive(move |size| {
+        let width = size.width.max(1.0);
+        let height = size.height.max(1.0);
+
+        let media: Element<'a, DetailMessage> = match handle.as_ref() {
+            Some(handle) => image(handle.clone())
+                .content_fit(iced::ContentFit::Contain)
+                .width(Fill)
+                .height(Fill)
+                .into(),
+            None => container(text("Preview unavailable").size(13))
+                .width(Fill)
+                .height(Fill)
+                .align_x(Horizontal::Center)
+                .align_y(iced::alignment::Vertical::Center)
+                .into(),
+        };
+
+        mouse_area(container(media).width(Fill).height(Fill).style(|_theme: &Theme| {
+            container::Style {
+                background: Some(Background::Color(Color::from_rgb8(8, 8, 10))),
+                border: Border {
+                    radius: 12.0.into(),
+                    width: 1.0,
+                    color: Color::from_rgb8(70, 72, 78),
+                },
+                ..Default::default()
+            }
+        }))
+        .on_press(DetailMessage::PreviewDragStart)
+        .on_release(DetailMessage::PreviewDragEnd)
+        .on_exit(DetailMessage::PreviewDragEnd)
+        .on_move(move |position| DetailMessage::PreviewPointerMoved { position, width, height })
+        .interaction(interaction)
+        .into()
+    })
+    .height(180);
+
+    let error = preview_error.unwrap_or("");
+    section(
+        "Preview",
+        column![
+            container(visual).id("detail.preview").width(Fill),
+            text("Drag the media to reposition it. Sliders stay synchronized.")
+                .size(12)
+                .color(Color::from_rgb8(190, 194, 202)),
+            text(error).size(12).color(Color::from_rgb8(255, 180, 171)),
+        ]
+        .spacing(8),
+    )
 }
 
 fn output_chips<'a>(
